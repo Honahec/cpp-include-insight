@@ -1,0 +1,17 @@
+[package]
+name = "cpp-include-insight"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description.workspace = true
+
+[[bin]]
+name = "cpp-include-insight"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+cpp-include-insight-core = { path = "../cpp-include-insight-core" }

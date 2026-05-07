@@ -1,0 +1,23 @@
+[workspace]
+members = [
+  "crates/cpp-include-insight-core",
+  "crates/cpp-include-insight-cli",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/Honahec/cpp-include-insight"
+homepage = "https://github.com/Honahec/cpp-include-insight"
+description = "C/C++ include impact analyzer for pull requests, refactoring, and build-time optimization."
+
+[workspace.dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+walkdir = "2"
+thiserror = "2"
+tempfile = "3"
