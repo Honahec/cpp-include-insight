@@ -18,6 +18,7 @@ The first milestone focuses on:
 - resolving project-local includes
 - building an include dependency graph
 - emitting graph JSON for downstream analysis
+- reporting include impact and cycles
 
 ## Motivation
 
