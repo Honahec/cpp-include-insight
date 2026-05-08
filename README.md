@@ -17,6 +17,7 @@ The first milestone focuses on:
 - extracting `#include` directives
 - resolving project-local includes
 - building an include dependency graph
+- emitting graph JSON for downstream analysis
 - reporting include impact and cycles
 
 ## Motivation
@@ -82,23 +83,54 @@ cargo run -p cpp-include-insight -- --help
 Scan a project:
 
 ```bash
-cargo run -p cpp-include-insight -- scan .
-```
-
-Scan a project and output JSON:
-
-```bash
-cargo run -p cpp-include-insight -- scan . --format json
+cargo run -p cpp-include-insight -- scan . -I include
 ```
 
 Example output:
 
 ```text
-Scanned 2 files.
-Found 3 include directives.
-tests/fixtures/simple/src/main.cpp:1 -> app.h
-tests/fixtures/simple/src/main.cpp:2 -> vector
+Scanned 3 files.
+Found 5 include directives.
+Resolved 2 project includes.
+External includes: 3
+Missing includes: 0
 tests/fixtures/simple/include/app.h:3 -> string
+tests/fixtures/simple/src/local.h:3 -> math.h
+tests/fixtures/simple/src/main.cpp:1 -> app.h
+tests/fixtures/simple/src/main.cpp:2 -> local.h
+tests/fixtures/simple/src/main.cpp:3 -> vector
+```
+
+Build the include graph and output JSON:
+
+```bash
+cargo run -p cpp-include-insight -- graph . -I include --format json
+```
+
+Example output:
+
+```json
+{
+  "files": [
+    {
+      "id": 0,
+      "path": "tests/fixtures/simple/include/app.h"
+    }
+  ],
+  "edges": [
+    {
+      "from": 2,
+      "to": {
+        "resolved": 0
+      },
+      "include_path": "app.h",
+      "kind": "quote",
+      "line": 1
+    }
+  ],
+  "missing": [],
+  "external": []
+}
 ```
 
 ## Planned CLI
