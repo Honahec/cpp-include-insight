@@ -42,6 +42,13 @@ pub struct IncludeGraph {
     pub edges: Vec<IncludeEdge>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IncludeGraphStats {
+    pub resolved: usize,
+    pub external: usize,
+    pub missing: usize,
+}
+
 impl IncludeGraph {
     pub fn from_scan_result(scan: &ScanResult, resolver: &IncludeResolver) -> Self {
         let mut graph = Self::default();
@@ -82,6 +89,32 @@ impl IncludeGraph {
 
     pub fn edges_from(&self, id: FileId) -> impl Iterator<Item = &IncludeEdge> {
         self.edges.iter().filter(move |edge| edge.from == id)
+    }
+
+    pub fn resolved_edges(&self) -> impl Iterator<Item = &IncludeEdge> {
+        self.edges
+            .iter()
+            .filter(|edge| matches!(edge.to, IncludeTarget::Resolved(_)))
+    }
+
+    pub fn external_edges(&self) -> impl Iterator<Item = &IncludeEdge> {
+        self.edges
+            .iter()
+            .filter(|edge| matches!(edge.to, IncludeTarget::External(_)))
+    }
+
+    pub fn missing_edges(&self) -> impl Iterator<Item = &IncludeEdge> {
+        self.edges
+            .iter()
+            .filter(|edge| matches!(edge.to, IncludeTarget::Missing(_)))
+    }
+
+    pub fn stats(&self) -> IncludeGraphStats {
+        IncludeGraphStats {
+            resolved: self.resolved_edges().count(),
+            external: self.external_edges().count(),
+            missing: self.missing_edges().count(),
+        }
     }
 
     fn get_or_add_file_id(
@@ -242,5 +275,44 @@ mod tests {
             PathBuf::from("main.cpp")
         );
         assert_eq!(graph.edges_from(FileId(0)).count(), 1);
+    }
+
+    #[test]
+    fn counts_edges_by_target_kind() {
+        let graph = IncludeGraph {
+            files: vec![],
+            edges: vec![
+                IncludeEdge {
+                    from: FileId(0),
+                    to: IncludeTarget::Resolved(FileId(1)),
+                    include_path: "app.h".to_owned(),
+                    kind: IncludeKind::Quote,
+                    line: 1,
+                },
+                IncludeEdge {
+                    from: FileId(0),
+                    to: IncludeTarget::External("vector".to_owned()),
+                    include_path: "vector".to_owned(),
+                    kind: IncludeKind::Angle,
+                    line: 2,
+                },
+                IncludeEdge {
+                    from: FileId(0),
+                    to: IncludeTarget::Missing("missing.h".to_owned()),
+                    include_path: "missing.h".to_owned(),
+                    kind: IncludeKind::Quote,
+                    line: 3,
+                },
+            ],
+        };
+
+        assert_eq!(
+            graph.stats(),
+            IncludeGraphStats {
+                resolved: 1,
+                external: 1,
+                missing: 1,
+            }
+        );
     }
 }
