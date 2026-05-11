@@ -1,8 +1,9 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use cpp_include_insight_core::{
-    IncludeGraph, IncludeResolver, ScanOptions, detect_include_cycles, graph_to_json_value,
-    render_include_cycles, render_include_tree, render_reverse_include_tree, scan_project,
+    DEFAULT_MAX_WHY_PATHS, IncludeGraph, IncludeResolver, ScanOptions, WhyOptions,
+    detect_include_cycles, find_include_paths, graph_to_json_value, render_include_cycles,
+    render_include_tree, render_reverse_include_tree, render_why_result, scan_project,
 };
 use std::path::PathBuf;
 
@@ -74,6 +75,31 @@ enum Command {
         #[arg(short = 'I', long = "include-dir")]
         include_dirs: Vec<PathBuf>,
     },
+
+    /// Explain why one project file depends on another.
+    Why {
+        /// Source file
+        source: PathBuf,
+
+        /// Target file
+        target: PathBuf,
+
+        /// Include directories.
+        #[arg(short = 'I', long = "include-dir")]
+        include_dirs: Vec<PathBuf>,
+
+        /// Maximum number of paths to print.
+        #[arg(long = "max-paths", conflicts_with = "all", value_parser = parse_positive_usize)]
+        max_paths: Option<usize>,
+
+        /// Print only the shortest dependency path.
+        #[arg(long, conflicts_with = "all")]
+        shortest: bool,
+
+        /// Search exhaustively for all simple dependency paths.
+        #[arg(long)]
+        all: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -85,6 +111,18 @@ enum OutputFormat {
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum GraphOutputFormat {
     Json,
+}
+
+fn parse_positive_usize(value: &str) -> std::result::Result<usize, String> {
+    let parsed = value
+        .parse::<usize>()
+        .map_err(|error| format!("expected a positive integer: {error}"))?;
+
+    if parsed == 0 {
+        return Err("value must be greater than 0".to_owned());
+    }
+
+    Ok(parsed)
 }
 
 fn main() -> Result<()> {
@@ -214,6 +252,58 @@ fn main() -> Result<()> {
             let cycles = detect_include_cycles(&graph);
 
             print!("{}", render_include_cycles(&graph, &cycles, &path));
+        }
+
+        Command::Why {
+            source,
+            target,
+            include_dirs,
+            max_paths,
+            shortest,
+            all,
+        } => {
+            let project_root = std::env::current_dir()?;
+            let source_file = if source.is_absolute() {
+                source
+            } else {
+                project_root.join(source)
+            };
+            let target_file = if target.is_absolute() {
+                target
+            } else {
+                project_root.join(target)
+            };
+            let options = ScanOptions {
+                include_dirs: include_dirs.clone(),
+            };
+            let result = scan_project(&project_root, &options)?;
+            let resolver = IncludeResolver::new(&project_root, include_dirs);
+            let graph = IncludeGraph::from_scan_result(&result, &resolver);
+            let Some(source_id) = graph.file_id_for_path(&source_file) else {
+                anyhow::bail!(
+                    "{} is not a scanned C/C++ source or header under {}",
+                    source_file.display(),
+                    project_root.display()
+                );
+            };
+            let Some(target_id) = graph.file_id_for_path(&target_file) else {
+                anyhow::bail!(
+                    "{} is not a scanned C/C++ source or header under {}",
+                    target_file.display(),
+                    project_root.display()
+                );
+            };
+            let why_options = WhyOptions {
+                max_paths: if all {
+                    None
+                } else {
+                    max_paths.or(Some(DEFAULT_MAX_WHY_PATHS))
+                },
+                shortest,
+            };
+            let why = find_include_paths(&graph, source_id, target_id, &why_options);
+
+            print!("{}", render_why_result(&graph, &why, &project_root));
         }
     }
 
