@@ -1,8 +1,8 @@
 name: Auto merge
 
 on:
-  pull_request_review:
-    types: [submitted]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
 
 permissions:
   contents: write
@@ -13,8 +13,8 @@ jobs:
     runs-on: ubuntu-latest
 
     if: >
-      github.event.review.state == 'approved' &&
-      github.event.pull_request.draft == false
+      github.event.pull_request.draft == false &&
+      contains(github.event.pull_request.labels.*.name, 'auto-merge')
 
     steps:
       - name: Enable auto-merge with merge commit
