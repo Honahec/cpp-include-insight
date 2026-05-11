@@ -6,6 +6,10 @@ pub mod resolver;
 pub mod scanner;
 
 pub use analysis::cycles::{IncludeCycle, detect_include_cycles, render_include_cycles};
+pub use analysis::why::{
+    DEFAULT_MAX_WHY_PATHS, IncludePath, WhyOptions, WhyResult, find_include_paths,
+    render_why_result,
+};
 pub use graph::{FileId, FileNode, IncludeEdge, IncludeGraph, IncludeGraphStats, IncludeTarget};
 pub use output::json::graph_to_json_value;
 pub use output::tree::{render_include_tree, render_reverse_include_tree};
