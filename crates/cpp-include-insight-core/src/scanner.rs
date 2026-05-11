@@ -66,18 +66,18 @@ fn should_ignore(path: &Path) -> bool {
         return false;
     };
 
-    matches!(
-        name,
-        ".git"
-            | "build"
-            | "cmake-build-debug"
-            | "cmake_build_release"
-            | "target"
-            | "node_modules"
-            | "third_party"
-            | "external"
-            | "vendor"
-    )
+    name.starts_with("cmake-build-")
+        || matches!(
+            name,
+            ".git"
+                | "build"
+                | "cmake_build_release"
+                | "target"
+                | "node_modules"
+                | "third_party"
+                | "external"
+                | "vendor"
+        )
 }
 
 fn is_cpp_like_file(path: &Path) -> bool {
@@ -85,4 +85,31 @@ fn is_cpp_like_file(path: &Path) -> bool {
         path.extension().and_then(|ext| ext.to_str()),
         Some("c" | "cc" | "cpp" | "cxx" | "h" | "hh" | "hpp" | "hxx")
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn ignores_cmake_build_directories_by_prefix() {
+        let temp = tempdir().unwrap();
+        let src_dir = temp.path().join("src");
+        let build_dir = temp.path().join("cmake-build-release");
+
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::create_dir_all(&build_dir).unwrap();
+        fs::write(src_dir.join("main.cpp"), "#include \"app.h\"\n").unwrap();
+        fs::write(
+            build_dir.join("generated.cpp"),
+            "#include \"generated.h\"\n",
+        )
+        .unwrap();
+
+        let result = scan_project(temp.path(), &ScanOptions::default()).unwrap();
+
+        assert_eq!(result.files_scanned, 1);
+        assert_eq!(result.files[0].file, src_dir.join("main.cpp"));
+    }
 }

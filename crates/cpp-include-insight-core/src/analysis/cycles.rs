@@ -1,4 +1,4 @@
-use crate::{FileId, IncludeEdge, IncludeGraph, IncludeKind, IncludeTarget};
+use crate::{FileId, IncludeEdge, IncludeGraph, IncludeTarget};
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
@@ -47,21 +47,7 @@ pub fn render_include_cycles(
 
     for (index, cycle) in cycles.iter().enumerate() {
         output.push_str(&format!("Cycle {}:\n", index + 1));
-        output.push_str("Files:\n");
-
-        for file in &cycle.files {
-            output.push_str("  ");
-            output.push_str(&display_file(graph, *file, base_path));
-            output.push('\n');
-        }
-
-        output.push_str("Edges:\n");
-
-        for edge in &cycle.edges {
-            output.push_str("  ");
-            output.push_str(&display_edge(graph, edge, base_path));
-            output.push('\n');
-        }
+        render_cycle_path(graph, cycle, base_path, &mut output);
 
         if index + 1 < cycles.len() {
             output.push('\n');
@@ -196,6 +182,98 @@ fn cycle_from_component(graph: &IncludeGraph, mut files: Vec<FileId>) -> Option<
     Some(IncludeCycle { files, edges })
 }
 
+fn render_cycle_path(
+    graph: &IncludeGraph,
+    cycle: &IncludeCycle,
+    base_path: &Path,
+    output: &mut String,
+) {
+    let Some(path) = find_cycle_path(cycle) else {
+        for edge in &cycle.edges {
+            output.push_str("  ");
+            output.push_str(&display_path_edge(graph, edge, base_path));
+            output.push('\n');
+        }
+        return;
+    };
+
+    for (index, edge) in path.iter().enumerate() {
+        if index == 0 {
+            output.push_str(&format!(
+                "{}:{}\n",
+                display_file(graph, edge.from, base_path),
+                edge.line
+            ));
+        }
+
+        let Some(to) = resolved_target(edge) else {
+            continue;
+        };
+
+        output.push_str("  -> ");
+        output.push_str(&display_file(graph, to, base_path));
+
+        if let Some(next_edge) = path.get(index + 1) {
+            output.push_str(&format!(":{}", next_edge.line));
+        }
+
+        output.push('\n');
+    }
+}
+
+fn find_cycle_path(cycle: &IncludeCycle) -> Option<Vec<&IncludeEdge>> {
+    let start = *cycle.files.first()?;
+    let mut stack = HashSet::from([start]);
+    let mut path = Vec::new();
+
+    if find_cycle_path_from(cycle, start, start, &mut stack, &mut path) {
+        Some(path)
+    } else {
+        None
+    }
+}
+
+fn find_cycle_path_from<'a>(
+    cycle: &'a IncludeCycle,
+    start: FileId,
+    current: FileId,
+    stack: &mut HashSet<FileId>,
+    path: &mut Vec<&'a IncludeEdge>,
+) -> bool {
+    for edge in cycle.edges.iter().filter(|edge| edge.from == current) {
+        let Some(next) = resolved_target(edge) else {
+            continue;
+        };
+
+        path.push(edge);
+
+        if next == start {
+            return true;
+        }
+
+        if !stack.contains(&next) {
+            stack.insert(next);
+
+            if find_cycle_path_from(cycle, start, next, stack, path) {
+                return true;
+            }
+
+            stack.remove(&next);
+        }
+
+        path.pop();
+    }
+
+    false
+}
+
+fn resolved_target(edge: &IncludeEdge) -> Option<FileId> {
+    match edge.to {
+        IncludeTarget::Resolved(to) => Some(to),
+        IncludeTarget::External(_) | IncludeTarget::Missing(_) => None,
+    }
+}
+
 fn cycle_sort_key(graph: &IncludeGraph, cycle: &IncludeCycle) -> String {
     cycle
         .files
@@ -225,26 +303,18 @@ fn file_sort_key(graph: &IncludeGraph, id: FileId) -> String {
         .unwrap_or_else(|| format!("<unknown:{}>", id.0))
 }
 
-fn display_edge(graph: &IncludeGraph, edge: &IncludeEdge, base_path: &Path) -> String {
+fn display_path_edge(graph: &IncludeGraph, edge: &IncludeEdge, base_path: &Path) -> String {
     let to = match edge.to {
         IncludeTarget::Resolved(to) => display_file(graph, to, base_path),
         IncludeTarget::External(_) | IncludeTarget::Missing(_) => "<unresolved>".to_owned(),
     };
 
     format!(
-        "{}:{} -> {} (include {})",
+        "{}:{} -> {}",
         display_file(graph, edge.from, base_path),
         edge.line,
-        to,
-        display_include(edge.kind, &edge.include_path)
+        to
     )
-}
-
-fn display_include(kind: IncludeKind, include_path: &str) -> String {
-    match kind {
-        IncludeKind::Quote => format!("\"{include_path}\""),
-        IncludeKind::Angle => format!("<{include_path}>"),
-    }
 }
 
 fn display_file(graph: &IncludeGraph, id: FileId, base_path: &Path) -> String {
@@ -312,12 +382,9 @@ mod tests {
                 "Found 1 include cycle.\n",
                 "\n",
                 "Cycle 1:\n",
-                "Files:\n",
-                "  include/a.h\n",
-                "  include/b.h\n",
-                "Edges:\n",
-                "  include/a.h:4 -> include/b.h (include \"b.h\")\n",
-                "  include/b.h:7 -> include/a.h (include \"a.h\")\n",
+                "include/a.h:4\n",
+                "  -> include/b.h:7\n",
+                "  -> include/a.h\n",
             )
         );
     }
@@ -372,6 +439,47 @@ mod tests {
         assert_eq!(cycles.len(), 1);
         assert_eq!(cycles[0].files, vec![FileId(0)]);
         assert_eq!(cycles[0].edges.len(), 1);
+        assert_eq!(
+            render_include_cycles(&graph, &cycles, "/repo"),
+            concat!(
+                "Found 1 include cycle.\n",
+                "\n",
+                "Cycle 1:\n",
+                "include/self.h:9\n",
+                "  -> include/self.h\n",
+            )
+        );
+    }
+
+    #[test]
+    fn renders_one_followable_path_for_a_branching_component() {
+        let graph = IncludeGraph {
+            files: vec![
+                test_file(0, "/repo/include/a.h"),
+                test_file(1, "/repo/include/b.h"),
+                test_file(2, "/repo/include/c.h"),
+            ],
+            edges: vec![
+                test_edge(0, 1, "b.h", 1),
+                test_edge(0, 2, "c.h", 2),
+                test_edge(1, 0, "a.h", 3),
+                test_edge(2, 0, "a.h", 4),
+            ],
+        };
+
+        let cycles = detect_include_cycles(&graph);
+
+        assert_eq!(
+            render_include_cycles(&graph, &cycles, "/repo"),
+            concat!(
+                "Found 1 include cycle.\n",
+                "\n",
+                "Cycle 1:\n",
+                "include/a.h:1\n",
+                "  -> include/b.h:3\n",
+                "  -> include/a.h\n",
+            )
+        );
     }
 
     fn test_file(id: usize, path: &str) -> FileNode {

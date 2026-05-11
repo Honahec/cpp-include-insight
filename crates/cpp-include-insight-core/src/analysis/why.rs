@@ -1,6 +1,6 @@
 use crate::{FileId, IncludeEdge, IncludeGraph, IncludeTarget};
 use std::{
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     path::{Path, PathBuf},
 };
 
@@ -49,23 +49,20 @@ pub fn find_include_paths(
         };
     }
 
-    let search_limit = if options.shortest {
-        None
-    } else {
-        options
-            .max_paths
-            .map(|max_paths| max_paths.saturating_add(1))
-    };
+    if options.shortest {
+        return find_shortest_include_path(graph, source, target);
+    }
+
+    let search_limit = options
+        .max_paths
+        .map(|max_paths| max_paths.saturating_add(1));
     let mut finder = PathFinder::new(graph, target, search_limit);
     finder.search(source);
 
     let mut paths = finder.paths;
     let mut truncated = false;
 
-    if options.shortest {
-        paths.sort_by_key(|path| path.edges.len());
-        paths.truncate(1);
-    } else if let Some(max_paths) = options.max_paths
+    if let Some(max_paths) = options.max_paths
         && paths.len() > max_paths
     {
         paths.truncate(max_paths);
@@ -78,6 +75,53 @@ pub fn find_include_paths(
         paths,
         truncated,
     }
+}
+
+fn find_shortest_include_path(graph: &IncludeGraph, source: FileId, target: FileId) -> WhyResult {
+    let mut seen = HashSet::from([source]);
+    let mut queue = VecDeque::from([PathCandidate {
+        file: source,
+        edges: Vec::new(),
+    }]);
+
+    while let Some(candidate) = queue.pop_front() {
+        for edge in sorted_resolved_edges_from(graph, candidate.file) {
+            let IncludeTarget::Resolved(next) = edge.to else {
+                continue;
+            };
+
+            if !seen.insert(next) {
+                continue;
+            }
+
+            let mut edges = candidate.edges.clone();
+            edges.push(edge);
+
+            if next == target {
+                return WhyResult {
+                    source,
+                    target,
+                    paths: vec![IncludePath { edges }],
+                    truncated: false,
+                };
+            }
+
+            queue.push_back(PathCandidate { file: next, edges });
+        }
+    }
+
+    WhyResult {
+        source,
+        target,
+        paths: Vec::new(),
+        truncated: false,
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PathCandidate {
+    file: FileId,
+    edges: Vec<IncludeEdge>,
 }
 
 pub fn render_why_result(
@@ -150,7 +194,7 @@ impl<'a> PathFinder<'a> {
 
         self.stack.insert(file);
 
-        for edge in self.sorted_resolved_edges_from(file) {
+        for edge in sorted_resolved_edges_from(self.graph, file) {
             if self.reached_limit() {
                 break;
             }
@@ -179,34 +223,33 @@ impl<'a> PathFinder<'a> {
         self.stack.remove(&file);
     }
 
-    fn sorted_resolved_edges_from(&self, file: FileId) -> Vec<IncludeEdge> {
-        let mut edges = self
-            .graph
-            .edges_from(file)
-            .filter(|edge| matches!(edge.to, IncludeTarget::Resolved(_)))
-            .cloned()
-            .collect::<Vec<_>>();
-
-        edges.sort_by_key(|edge| {
-            let to = match edge.to {
-                IncludeTarget::Resolved(to) => to,
-                IncludeTarget::External(_) | IncludeTarget::Missing(_) => FileId(usize::MAX),
-            };
-
-            (
-                edge.line,
-                display_file(self.graph, to, Path::new("")),
-                edge.include_path.clone(),
-            )
-        });
-        edges
-    }
-
     fn reached_limit(&self) -> bool {
         self.limit
             .map(|limit| self.paths.len() >= limit)
             .unwrap_or(false)
     }
+}
+
+fn sorted_resolved_edges_from(graph: &IncludeGraph, file: FileId) -> Vec<IncludeEdge> {
+    let mut edges = graph
+        .edges_from(file)
+        .filter(|edge| matches!(edge.to, IncludeTarget::Resolved(_)))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    edges.sort_by_key(|edge| {
+        let to = match edge.to {
+            IncludeTarget::Resolved(to) => to,
+            IncludeTarget::External(_) | IncludeTarget::Missing(_) => FileId(usize::MAX),
+        };
+
+        (
+            edge.line,
+            display_file(graph, to, Path::new("")),
+            edge.include_path.clone(),
+        )
+    });
+    edges
 }
 
 fn render_path(graph: &IncludeGraph, path: &IncludePath, base_path: &Path, output: &mut String) {

@@ -332,12 +332,9 @@ fn cycles_reports_single_cycle_with_line_metadata() {
             "Found 1 include cycle.\n",
             "\n",
             "Cycle 1:\n",
-            "Files:\n",
-            "  include/a.h\n",
-            "  include/b.h\n",
-            "Edges:\n",
-            "  include/a.h:3 -> include/b.h (include \"b.h\")\n",
-            "  include/b.h:3 -> include/a.h (include \"a.h\")\n",
+            "include/a.h:3\n",
+            "  -> include/b.h:3\n",
+            "  -> include/a.h\n",
         )
     );
 }
@@ -354,20 +351,14 @@ fn cycles_reports_multiple_cycles_and_ignores_unresolved_targets() {
             "Found 2 include cycles.\n",
             "\n",
             "Cycle 1:\n",
-            "Files:\n",
-            "  include/a.h\n",
-            "  include/b.h\n",
-            "Edges:\n",
-            "  include/a.h:3 -> include/b.h (include \"b.h\")\n",
-            "  include/b.h:3 -> include/a.h (include \"a.h\")\n",
+            "include/a.h:3\n",
+            "  -> include/b.h:3\n",
+            "  -> include/a.h\n",
             "\n",
             "Cycle 2:\n",
-            "Files:\n",
-            "  include/c.h\n",
-            "  include/d.h\n",
-            "Edges:\n",
-            "  include/c.h:3 -> include/d.h (include \"d.h\")\n",
-            "  include/d.h:3 -> include/c.h (include \"c.h\")\n",
+            "include/c.h:3\n",
+            "  -> include/d.h:3\n",
+            "  -> include/c.h\n",
         )
     );
 }
