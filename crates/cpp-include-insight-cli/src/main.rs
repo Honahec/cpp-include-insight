@@ -1,12 +1,12 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use cpp_include_insight_core::{
-    DEFAULT_MAX_WHY_PATHS, IncludeGraph, IncludeResolver, ScanOptions, WhyOptions,
+    DEFAULT_MAX_WHY_PATHS, IncludeGraph, IncludeResolver, MermaidOptions, ScanOptions, WhyOptions,
     analyze_include_impact, detect_include_cycles, find_include_paths, graph_to_json_value,
-    render_impact_result, render_include_cycles, render_include_tree, render_reverse_include_tree,
-    render_why_result, scan_project,
+    render_impact_result, render_include_cycles, render_include_tree, render_mermaid_graph,
+    render_reverse_include_tree, render_why_result, scan_project,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Parser)]
 #[command(name = "cpp-include-insight")]
@@ -35,7 +35,7 @@ enum Command {
 
     /// Build the include dependency graph.
     Graph {
-        /// Project root
+        /// Project root or root file for graph slices.
         path: PathBuf,
 
         /// Include directories.
@@ -45,6 +45,14 @@ enum Command {
         /// Output format.
         #[arg(long, value_enum, default_value_t = GraphOutputFormat::Json)]
         format: GraphOutputFormat,
+
+        /// Maximum include depth when rendering from a root file.
+        #[arg(long)]
+        depth: Option<usize>,
+
+        /// Omit external angle includes from Mermaid output.
+        #[arg(long = "no-external")]
+        no_external: bool,
     },
 
     /// Print the forward include tree for a source file.
@@ -122,6 +130,7 @@ enum OutputFormat {
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum GraphOutputFormat {
     Json,
+    Mermaid,
 }
 
 fn parse_positive_usize(value: &str) -> std::result::Result<usize, String> {
@@ -184,12 +193,15 @@ fn main() -> Result<()> {
             path,
             include_dirs,
             format,
+            depth,
+            no_external,
         } => {
+            let (project_root, root_file) = graph_input_context(&path)?;
             let options = ScanOptions {
                 include_dirs: include_dirs.clone(),
             };
-            let result = scan_project(&path, &options)?;
-            let resolver = IncludeResolver::new(&path, include_dirs);
+            let result = scan_project(&project_root, &options)?;
+            let resolver = IncludeResolver::new(&project_root, include_dirs);
             let graph = IncludeGraph::from_scan_result(&result, &resolver);
 
             match format {
@@ -197,6 +209,32 @@ fn main() -> Result<()> {
                     println!(
                         "{}",
                         serde_json::to_string_pretty(&graph_to_json_value(&graph))?
+                    );
+                }
+                GraphOutputFormat::Mermaid => {
+                    let root = if let Some(root_file) = root_file {
+                        Some(graph.file_id_for_path(&root_file).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "{} is not a scanned C/C++ source or header under {}",
+                                root_file.display(),
+                                project_root.display()
+                            )
+                        })?)
+                    } else {
+                        None
+                    };
+
+                    print!(
+                        "{}",
+                        render_mermaid_graph(
+                            &graph,
+                            &project_root,
+                            MermaidOptions {
+                                root,
+                                max_depth: depth,
+                                include_external: !no_external,
+                            },
+                        )
                     );
                 }
             }
@@ -344,4 +382,19 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn graph_input_context(path: &Path) -> Result<(PathBuf, Option<PathBuf>)> {
+    let current_dir = std::env::current_dir()?;
+    let input = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        current_dir.join(path)
+    };
+
+    if input.is_file() {
+        Ok((current_dir, Some(input)))
+    } else {
+        Ok((path.to_path_buf(), None))
+    }
 }

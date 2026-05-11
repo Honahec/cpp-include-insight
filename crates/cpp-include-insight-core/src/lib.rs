@@ -15,6 +15,7 @@ pub use analysis::why::{
 };
 pub use graph::{FileId, FileNode, IncludeEdge, IncludeGraph, IncludeGraphStats, IncludeTarget};
 pub use output::json::graph_to_json_value;
+pub use output::mermaid::{MermaidOptions, render_mermaid_graph};
 pub use output::tree::{render_include_tree, render_reverse_include_tree};
 pub use parser::{IncludeDirective, IncludeKind};
 pub use resolver::{IncludeResolution, IncludeResolver};
