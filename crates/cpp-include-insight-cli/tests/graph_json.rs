@@ -274,3 +274,140 @@ fn cycles_reports_multiple_cycles_and_ignores_unresolved_targets() {
         )
     );
 }
+
+#[test]
+fn why_reports_one_dependency_path() {
+    let fixture = fixture_path("why-one-path");
+    let stdout = run_cli_in(
+        &["why", "src/main.cpp", "include/config.h", "-I", "include"],
+        Some(&fixture),
+    );
+
+    assert_eq!(
+        stdout,
+        concat!(
+            "src/main.cpp depends on include/config.h through 1 path.\n",
+            "\n",
+            "Path 1:\n",
+            "src/main.cpp:1\n",
+            "  -> include/app.h:3\n",
+            "  -> include/config.h\n",
+        )
+    );
+}
+
+#[test]
+fn why_reports_multiple_dependency_paths() {
+    let fixture = fixture_path("why-multiple-paths");
+    let stdout = run_cli_in(
+        &[
+            "why",
+            "src/main.cpp",
+            "include/config.h",
+            "-I",
+            "include",
+            "--all",
+        ],
+        Some(&fixture),
+    );
+
+    assert_eq!(
+        stdout,
+        concat!(
+            "src/main.cpp depends on include/config.h through 3 paths.\n",
+            "\n",
+            "Path 1:\n",
+            "src/main.cpp:1\n",
+            "  -> include/app.h:3\n",
+            "  -> include/config.h\n",
+            "\n",
+            "Path 2:\n",
+            "src/main.cpp:2\n",
+            "  -> include/logger.h:3\n",
+            "  -> include/config.h\n",
+            "\n",
+            "Path 3:\n",
+            "src/main.cpp:3\n",
+            "  -> include/runtime.h:3\n",
+            "  -> include/settings.h:3\n",
+            "  -> include/config.h\n",
+        )
+    );
+}
+
+#[test]
+fn why_reports_no_dependency_path() {
+    let fixture = fixture_path("why-no-path");
+    let stdout = run_cli_in(
+        &["why", "src/main.cpp", "include/config.h", "-I", "include"],
+        Some(&fixture),
+    );
+
+    assert_eq!(
+        stdout,
+        "src/main.cpp does not depend on include/config.h.\n"
+    );
+}
+
+#[test]
+fn why_respects_max_paths_bound() {
+    let fixture = fixture_path("why-multiple-paths");
+    let stdout = run_cli_in(
+        &[
+            "why",
+            "src/main.cpp",
+            "include/config.h",
+            "-I",
+            "include",
+            "--max-paths",
+            "2",
+        ],
+        Some(&fixture),
+    );
+
+    assert_eq!(
+        stdout,
+        concat!(
+            "src/main.cpp depends on include/config.h through 2 paths.\n",
+            "Output was bounded; use --all to search exhaustively.\n",
+            "\n",
+            "Path 1:\n",
+            "src/main.cpp:1\n",
+            "  -> include/app.h:3\n",
+            "  -> include/config.h\n",
+            "\n",
+            "Path 2:\n",
+            "src/main.cpp:2\n",
+            "  -> include/logger.h:3\n",
+            "  -> include/config.h\n",
+        )
+    );
+}
+
+#[test]
+fn why_shortest_reports_only_the_shortest_path() {
+    let fixture = fixture_path("why-multiple-paths");
+    let stdout = run_cli_in(
+        &[
+            "why",
+            "src/main.cpp",
+            "include/config.h",
+            "-I",
+            "include",
+            "--shortest",
+        ],
+        Some(&fixture),
+    );
+
+    assert_eq!(
+        stdout,
+        concat!(
+            "src/main.cpp depends on include/config.h through 1 path.\n",
+            "\n",
+            "Path 1:\n",
+            "src/main.cpp:1\n",
+            "  -> include/app.h:3\n",
+            "  -> include/config.h\n",
+        )
+    );
+}
