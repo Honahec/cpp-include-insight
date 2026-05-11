@@ -1,8 +1,8 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use cpp_include_insight_core::{
-    IncludeGraph, IncludeResolver, ScanOptions, graph_to_json_value, render_include_tree,
-    render_reverse_include_tree, scan_project,
+    IncludeGraph, IncludeResolver, ScanOptions, detect_include_cycles, graph_to_json_value,
+    render_include_cycles, render_include_tree, render_reverse_include_tree, scan_project,
 };
 use std::path::PathBuf;
 
@@ -59,6 +59,16 @@ enum Command {
     Rtree {
         /// Target source or header file
         file: PathBuf,
+
+        /// Include directories.
+        #[arg(short = 'I', long = "include-dir")]
+        include_dirs: Vec<PathBuf>,
+    },
+
+    /// Detect include cycles in the resolved project graph.
+    Cycles {
+        /// Project root
+        path: PathBuf,
 
         /// Include directories.
         #[arg(short = 'I', long = "include-dir")]
@@ -192,6 +202,18 @@ fn main() -> Result<()> {
                 "{}",
                 render_reverse_include_tree(&graph, root_id, &project_root)
             );
+        }
+
+        Command::Cycles { path, include_dirs } => {
+            let options = ScanOptions {
+                include_dirs: include_dirs.clone(),
+            };
+            let result = scan_project(&path, &options)?;
+            let resolver = IncludeResolver::new(&path, include_dirs);
+            let graph = IncludeGraph::from_scan_result(&result, &resolver);
+            let cycles = detect_include_cycles(&graph);
+
+            print!("{}", render_include_cycles(&graph, &cycles, &path));
         }
     }
 

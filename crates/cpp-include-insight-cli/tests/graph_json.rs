@@ -213,3 +213,64 @@ fn rtree_marks_cycles_without_recursing_forever() {
         )
     );
 }
+
+#[test]
+fn cycles_reports_no_cycles() {
+    let fixture = fixture_path("tree-normal");
+    let fixture = fixture.to_str().unwrap();
+    let stdout = run_cli(&["cycles", fixture, "-I", "include"]);
+
+    assert_eq!(stdout, "Found 0 include cycles.\n");
+}
+
+#[test]
+fn cycles_reports_single_cycle_with_line_metadata() {
+    let fixture = fixture_path("tree-cycle");
+    let fixture = fixture.to_str().unwrap();
+    let stdout = run_cli(&["cycles", fixture, "-I", "include"]);
+
+    assert_eq!(
+        stdout,
+        concat!(
+            "Found 1 include cycle.\n",
+            "\n",
+            "Cycle 1:\n",
+            "Files:\n",
+            "  include/a.h\n",
+            "  include/b.h\n",
+            "Edges:\n",
+            "  include/a.h:3 -> include/b.h (include \"b.h\")\n",
+            "  include/b.h:3 -> include/a.h (include \"a.h\")\n",
+        )
+    );
+}
+
+#[test]
+fn cycles_reports_multiple_cycles_and_ignores_unresolved_targets() {
+    let fixture = fixture_path("cycles-multiple");
+    let fixture = fixture.to_str().unwrap();
+    let stdout = run_cli(&["cycles", fixture, "-I", "include"]);
+
+    assert_eq!(
+        stdout,
+        concat!(
+            "Found 2 include cycles.\n",
+            "\n",
+            "Cycle 1:\n",
+            "Files:\n",
+            "  include/a.h\n",
+            "  include/b.h\n",
+            "Edges:\n",
+            "  include/a.h:3 -> include/b.h (include \"b.h\")\n",
+            "  include/b.h:3 -> include/a.h (include \"a.h\")\n",
+            "\n",
+            "Cycle 2:\n",
+            "Files:\n",
+            "  include/c.h\n",
+            "  include/d.h\n",
+            "Edges:\n",
+            "  include/c.h:3 -> include/d.h (include \"d.h\")\n",
+            "  include/d.h:3 -> include/c.h (include \"c.h\")\n",
+        )
+    );
+}
