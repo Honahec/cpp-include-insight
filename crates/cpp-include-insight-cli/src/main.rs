@@ -1,7 +1,8 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use cpp_include_insight_core::{
-    IncludeGraph, IncludeResolver, ScanOptions, graph_to_json_value, scan_project,
+    IncludeGraph, IncludeResolver, ScanOptions, graph_to_json_value, render_include_tree,
+    scan_project,
 };
 use std::path::PathBuf;
 
@@ -42,6 +43,16 @@ enum Command {
         /// Output format.
         #[arg(long, value_enum, default_value_t = GraphOutputFormat::Json)]
         format: GraphOutputFormat,
+    },
+
+    /// Print the forward include tree for a source file.
+    Tree {
+        /// Root source file
+        file: PathBuf,
+
+        /// Include directories.
+        #[arg(short = 'I', long = "include-dir")]
+        include_dirs: Vec<PathBuf>,
     },
 }
 
@@ -120,6 +131,30 @@ fn main() -> Result<()> {
                     );
                 }
             }
+        }
+
+        Command::Tree { file, include_dirs } => {
+            let project_root = std::env::current_dir()?;
+            let root_file = if file.is_absolute() {
+                file
+            } else {
+                project_root.join(file)
+            };
+            let options = ScanOptions {
+                include_dirs: include_dirs.clone(),
+            };
+            let result = scan_project(&project_root, &options)?;
+            let resolver = IncludeResolver::new(&project_root, include_dirs);
+            let graph = IncludeGraph::from_scan_result(&result, &resolver);
+            let Some(root_id) = graph.file_id_for_path(&root_file) else {
+                anyhow::bail!(
+                    "{} is not a scanned C/C++ source or header under {}",
+                    root_file.display(),
+                    project_root.display()
+                );
+            };
+
+            print!("{}", render_include_tree(&graph, root_id, &project_root));
         }
     }
 

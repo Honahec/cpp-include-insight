@@ -11,10 +11,18 @@ fn fixture_path(name: &str) -> PathBuf {
 }
 
 fn run_cli(args: &[&str]) -> String {
-    let output = Command::new(env!("CARGO_BIN_EXE_cpp-include-insight"))
-        .args(args)
-        .output()
-        .expect("failed to run cpp-include-insight");
+    run_cli_in(args, None)
+}
+
+fn run_cli_in(args: &[&str], current_dir: Option<&Path>) -> String {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cpp-include-insight"));
+    command.args(args);
+
+    if let Some(current_dir) = current_dir {
+        command.current_dir(current_dir);
+    }
+
+    let output = command.output().expect("failed to run cpp-include-insight");
 
     assert!(
         output.status.success(),
@@ -99,4 +107,48 @@ fn scan_text_reports_resolution_counts() {
     assert!(stdout.contains("Resolved 2 project includes."));
     assert!(stdout.contains("External includes: 3"));
     assert!(stdout.contains("Missing includes: 0"));
+}
+
+#[test]
+fn tree_outputs_forward_include_tree() {
+    let fixture = fixture_path("tree-normal");
+    let stdout = run_cli_in(&["tree", "src/main.cpp", "-I", "include"], Some(&fixture));
+
+    assert_eq!(
+        stdout,
+        "src/main.cpp\n`-- include/app.h\n    `-- include/config.h\n"
+    );
+}
+
+#[test]
+fn tree_marks_repeated_nodes() {
+    let fixture = fixture_path("tree-repeated");
+    let stdout = run_cli_in(&["tree", "src/main.cpp", "-I", "include"], Some(&fixture));
+
+    assert_eq!(
+        stdout,
+        concat!(
+            "src/main.cpp\n",
+            "|-- include/a.h\n",
+            "|   `-- include/shared.h\n",
+            "`-- include/b.h\n",
+            "    `-- include/shared.h [already shown]\n",
+        )
+    );
+}
+
+#[test]
+fn tree_marks_cycles_without_recursing_forever() {
+    let fixture = fixture_path("tree-cycle");
+    let stdout = run_cli_in(&["tree", "src/main.cpp", "-I", "include"], Some(&fixture));
+
+    assert_eq!(
+        stdout,
+        concat!(
+            "src/main.cpp\n",
+            "`-- include/a.h\n",
+            "    `-- include/b.h\n",
+            "        `-- include/a.h [cycle]\n",
+        )
+    );
 }

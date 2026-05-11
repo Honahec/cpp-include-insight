@@ -87,6 +87,15 @@ impl IncludeGraph {
         self.files.get(id.0)
     }
 
+    pub fn file_id_for_path(&self, path: &Path) -> Option<FileId> {
+        let needle = normalize_path(path);
+
+        self.files
+            .iter()
+            .find(|file| normalize_path(&file.path) == needle)
+            .map(|file| file.id)
+    }
+
     pub fn edges_from(&self, id: FileId) -> impl Iterator<Item = &IncludeEdge> {
         self.edges.iter().filter(move |edge| edge.from == id)
     }
@@ -313,6 +322,29 @@ mod tests {
                 external: 1,
                 missing: 1,
             }
+        );
+    }
+
+    #[test]
+    fn finds_file_id_by_equivalent_path() {
+        let temp = tempdir().unwrap();
+        let src_dir = temp.path().join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        let main_cpp = src_dir.join("main.cpp");
+        fs::write(&main_cpp, "").unwrap();
+
+        let graph = IncludeGraph {
+            files: vec![FileNode {
+                id: FileId(0),
+                path: main_cpp.clone(),
+            }],
+            edges: vec![],
+        };
+
+        assert_eq!(
+            graph.file_id_for_path(&src_dir.join("../src/main.cpp")),
+            Some(FileId(0))
         );
     }
 }
