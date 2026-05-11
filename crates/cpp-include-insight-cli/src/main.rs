@@ -2,8 +2,9 @@ use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use cpp_include_insight_core::{
     DEFAULT_MAX_WHY_PATHS, IncludeGraph, IncludeResolver, ScanOptions, WhyOptions,
-    detect_include_cycles, find_include_paths, graph_to_json_value, render_include_cycles,
-    render_include_tree, render_reverse_include_tree, render_why_result, scan_project,
+    analyze_include_impact, detect_include_cycles, find_include_paths, graph_to_json_value,
+    render_impact_result, render_include_cycles, render_include_tree, render_reverse_include_tree,
+    render_why_result, scan_project,
 };
 use std::path::PathBuf;
 
@@ -99,6 +100,16 @@ enum Command {
         /// Search exhaustively for all simple dependency paths.
         #[arg(long)]
         all: bool,
+    },
+
+    /// Report files affected by changes to a source or header file.
+    Impact {
+        /// Target source or header file
+        file: PathBuf,
+
+        /// Include directories.
+        #[arg(short = 'I', long = "include-dir")]
+        include_dirs: Vec<PathBuf>,
     },
 }
 
@@ -304,6 +315,31 @@ fn main() -> Result<()> {
             let why = find_include_paths(&graph, source_id, target_id, &why_options);
 
             print!("{}", render_why_result(&graph, &why, &project_root));
+        }
+
+        Command::Impact { file, include_dirs } => {
+            let project_root = std::env::current_dir()?;
+            let target_file = if file.is_absolute() {
+                file
+            } else {
+                project_root.join(file)
+            };
+            let options = ScanOptions {
+                include_dirs: include_dirs.clone(),
+            };
+            let result = scan_project(&project_root, &options)?;
+            let resolver = IncludeResolver::new(&project_root, include_dirs);
+            let graph = IncludeGraph::from_scan_result(&result, &resolver);
+            let Some(target_id) = graph.file_id_for_path(&target_file) else {
+                anyhow::bail!(
+                    "{} is not a scanned C/C++ source or header under {}",
+                    target_file.display(),
+                    project_root.display()
+                );
+            };
+            let impact = analyze_include_impact(&graph, target_id);
+
+            print!("{}", render_impact_result(&graph, &impact, &project_root));
         }
     }
 

@@ -6,6 +6,9 @@ pub mod resolver;
 pub mod scanner;
 
 pub use analysis::cycles::{IncludeCycle, detect_include_cycles, render_include_cycles};
+pub use analysis::impact::{
+    FileKind, ImpactResult, analyze_include_impact, classify_file, render_impact_result,
+};
 pub use analysis::why::{
     DEFAULT_MAX_WHY_PATHS, IncludePath, WhyOptions, WhyResult, find_include_paths,
     render_why_result,

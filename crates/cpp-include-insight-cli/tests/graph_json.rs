@@ -411,3 +411,39 @@ fn why_shortest_reports_only_the_shortest_path() {
         )
     );
 }
+
+#[test]
+fn impact_reports_direct_transitive_and_translation_unit_dependants() {
+    let fixture = fixture_path("impact");
+    let stdout = run_cli_in(
+        &["impact", "include/config.h", "-I", "include"],
+        Some(&fixture),
+    );
+
+    assert_eq!(
+        stdout,
+        concat!(
+            "include/config.h impacts 6 files.\n",
+            "\n",
+            "Translation units:\n",
+            "  src/legacy.c\n",
+            "  src/main.cpp\n",
+            "  src/server.cxx\n",
+            "  src/worker.cc\n",
+            "\n",
+            "Headers:\n",
+            "  include/app.h\n",
+            "  include/logger.hpp\n",
+            "\n",
+            "Direct dependants:\n",
+            "  include/app.h\n",
+            "  include/logger.hpp\n",
+            "  src/worker.cc\n",
+            "\n",
+            "Transitive dependants:\n",
+            "  src/legacy.c\n",
+            "  src/main.cpp\n",
+            "  src/server.cxx\n",
+        )
+    );
+}
