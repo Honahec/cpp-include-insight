@@ -152,3 +152,64 @@ fn tree_marks_cycles_without_recursing_forever() {
         )
     );
 }
+
+#[test]
+fn rtree_outputs_direct_dependants() {
+    let fixture = fixture_path("rtree-direct");
+    let stdout = run_cli_in(
+        &["rtree", "include/config.h", "-I", "include"],
+        Some(&fixture),
+    );
+
+    assert_eq!(stdout, "include/config.h\n`-- src/main.cpp\n");
+}
+
+#[test]
+fn rtree_outputs_transitive_dependants() {
+    let fixture = fixture_path("tree-normal");
+    let stdout = run_cli_in(
+        &["rtree", "include/config.h", "-I", "include"],
+        Some(&fixture),
+    );
+
+    assert_eq!(
+        stdout,
+        "include/config.h\n`-- include/app.h\n    `-- src/main.cpp\n"
+    );
+}
+
+#[test]
+fn rtree_marks_repeated_nodes() {
+    let fixture = fixture_path("tree-repeated");
+    let stdout = run_cli_in(
+        &["rtree", "include/shared.h", "-I", "include"],
+        Some(&fixture),
+    );
+
+    assert_eq!(
+        stdout,
+        concat!(
+            "include/shared.h\n",
+            "|-- include/a.h\n",
+            "|   `-- src/main.cpp\n",
+            "`-- include/b.h\n",
+            "    `-- src/main.cpp [already shown]\n",
+        )
+    );
+}
+
+#[test]
+fn rtree_marks_cycles_without_recursing_forever() {
+    let fixture = fixture_path("tree-cycle");
+    let stdout = run_cli_in(&["rtree", "include/a.h", "-I", "include"], Some(&fixture));
+
+    assert_eq!(
+        stdout,
+        concat!(
+            "include/a.h\n",
+            "|-- include/b.h\n",
+            "|   `-- include/a.h [cycle]\n",
+            "`-- src/main.cpp\n",
+        )
+    );
+}
