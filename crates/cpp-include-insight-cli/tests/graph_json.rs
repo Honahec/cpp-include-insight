@@ -97,6 +97,103 @@ fn graph_json_reports_external_includes() {
 }
 
 #[test]
+fn graph_mermaid_outputs_basic_include_graph_from_root_file() {
+    let fixture = fixture_path("tree-normal");
+    let stdout = run_cli_in(
+        &[
+            "graph",
+            "src/main.cpp",
+            "-I",
+            "include",
+            "--format",
+            "mermaid",
+        ],
+        Some(&fixture),
+    );
+
+    assert_eq!(
+        stdout,
+        concat!(
+            "graph TD\n",
+            "  src_main_cpp[\"src/main.cpp\"] --> include_app_h[\"include/app.h\"]\n",
+            "  include_app_h[\"include/app.h\"] --> include_config_h[\"include/config.h\"]\n",
+        )
+    );
+}
+
+#[test]
+fn graph_mermaid_respects_depth_from_root_file() {
+    let fixture = fixture_path("tree-normal");
+    let stdout = run_cli_in(
+        &[
+            "graph",
+            "src/main.cpp",
+            "-I",
+            "include",
+            "--format",
+            "mermaid",
+            "--depth",
+            "1",
+        ],
+        Some(&fixture),
+    );
+
+    assert_eq!(
+        stdout,
+        concat!(
+            "graph TD\n",
+            "  src_main_cpp[\"src/main.cpp\"] --> include_app_h[\"include/app.h\"]\n",
+        )
+    );
+}
+
+#[test]
+fn graph_mermaid_can_omit_external_includes() {
+    let fixture = fixture_path("simple");
+    let stdout = run_cli_in(
+        &[
+            "graph",
+            "src/main.cpp",
+            "-I",
+            "include",
+            "--format",
+            "mermaid",
+            "--no-external",
+        ],
+        Some(&fixture),
+    );
+
+    assert_eq!(
+        stdout,
+        concat!(
+            "graph TD\n",
+            "  src_main_cpp[\"src/main.cpp\"] --> include_app_h[\"include/app.h\"]\n",
+            "  src_main_cpp[\"src/main.cpp\"] --> src_local_h[\"src/local.h\"]\n",
+        )
+    );
+}
+
+#[test]
+fn graph_mermaid_includes_external_includes_by_default() {
+    let fixture = fixture_path("simple");
+    let stdout = run_cli_in(
+        &[
+            "graph",
+            "src/main.cpp",
+            "-I",
+            "include",
+            "--format",
+            "mermaid",
+        ],
+        Some(&fixture),
+    );
+
+    assert!(stdout.contains("external_vector[\"<vector>\"]"));
+    assert!(stdout.contains("external_string[\"<string>\"]"));
+    assert!(stdout.contains("external_math_h[\"<math.h>\"]"));
+}
+
+#[test]
 fn scan_text_reports_resolution_counts() {
     let fixture = fixture_path("simple");
     let fixture = fixture.to_str().unwrap();
