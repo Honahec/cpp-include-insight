@@ -1,6 +1,7 @@
 # cpp-include-insight
 
 [![CI](https://github.com/Honahec/cpp-include-insight/actions/workflows/ci.yml/badge.svg)](https://github.com/Honahec/cpp-include-insight/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/cpp-include-insight.svg)](https://crates.io/crates/cpp-include-insight)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
 `cpp-include-insight` is an experimental C/C++ include impact analyzer for refactoring, pull request review, and build-time investigation.
@@ -14,61 +15,69 @@ It scans direct `#include` directives, builds a project include graph, and answe
 
 ## Install
 
-Build from source:
+Install the latest published CLI from crates.io:
 
 ```bash
-cargo build --workspace
+cargo install cpp-include-insight --locked
 ```
 
-Run the CLI:
+Check the installed binary:
 
 ```bash
-cargo run -p cpp-include-insight -- --help
+cpp-include-insight --help
 ```
 
-## Commands
+## Usage
 
 Scan files and print include counts:
 
 ```bash
-cargo run -p cpp-include-insight -- scan . -I include
+cpp-include-insight scan . -I include
 ```
 
 Write graph JSON:
 
 ```bash
-cargo run -p cpp-include-insight -- graph . -I include --format json
+cpp-include-insight graph . -I include --format json
 ```
 
 Render a Mermaid graph from a root file:
 
 ```bash
-cargo run -p cpp-include-insight -- graph src/main.cpp -I include --format mermaid --depth 3 --no-external
+cpp-include-insight graph src/main.cpp -I include --format mermaid --depth 3 --no-external
 ```
 
 Inspect include relationships:
 
 ```bash
-cargo run -p cpp-include-insight -- tree src/main.cpp -I include
-cargo run -p cpp-include-insight -- rtree include/config.h -I include
-cargo run -p cpp-include-insight -- cycles . -I include
-cargo run -p cpp-include-insight -- why src/main.cpp include/config.h -I include --max-paths 5
-cargo run -p cpp-include-insight -- impact include/config.h -I include
+cpp-include-insight tree src/main.cpp -I include
+cpp-include-insight rtree include/config.h -I include
+cpp-include-insight cycles . -I include
+cpp-include-insight why src/main.cpp include/config.h -I include --max-paths 5
+cpp-include-insight impact include/config.h -I include
 ```
 
-Compare include graph changes between Git revisions:
+## Pull Request Reports
+
+Compare include graph changes between Git revisions and render a Markdown report:
 
 ```bash
-cargo run -p cpp-include-insight -- diff main...HEAD -I include
-cargo run -p cpp-include-insight -- diff main...HEAD -I include --fail-on-new-cycle
-cargo run -p cpp-include-insight -- ci --base main
+cpp-include-insight diff main...HEAD -I include
+cpp-include-insight report --base main --format markdown -I include
 ```
 
 `diff A...B` compares the merge-base of `A` and `B` against `B`. `diff A..B`
 compares `A` directly against `B`. Git revision diffs read committed content
-with `git archive`, so uncommitted worktree changes are not included. Use
-`--fail-on-new-cycle` to make CI fail when the diff introduces a new include
-cycle.
+with `git archive`, so uncommitted worktree changes are not included.
+
+## CI Checks
+
+Run include graph checks locally or in CI:
+
+```bash
+cpp-include-insight diff main...HEAD -I include --fail-on-new-cycle
+cpp-include-insight ci --base main
+```
 
 The `ci` command reads `cpp-include-insight.json`,
 `.cpp-include-insight.json`, or `.cpp-include-insight/ci.json` from the Git
@@ -95,11 +104,8 @@ root, and can also load an explicit path with `--config`:
 
 ## GitHub Action
 
-Run include graph checks on pull requests with the bundled GitHub Action. The
-checkout step must use `fetch-depth: 0` so Git revision diffs can find the base
-ref and merge base. A complete workflow is available at
-`examples/.github/workflows/include-insight.yml`; copy it into your repository's
-`.github/workflows/` directory when you want to enable the action.
+Run include graph checks on pull requests with the bundled GitHub Action. Use
+`fetch-depth: 0` so Git revision diffs can find the base ref and merge base.
 
 ```yaml
 name: Include Insight
@@ -148,9 +154,32 @@ duplicates. Add `pull-requests: write` only when `comment: true`; otherwise
 `contents: read` is enough. Missing or insufficient token permissions fail the
 comment step with a message that points back to this permission.
 
+The complete example workflow lives at
+`examples/.github/workflows/include-insight.yml`.
+
+## Limitations
+
+The current scanner supports direct includes:
+
+```cpp
+#include "app.h"
+#include <vector>
+# include "foo/bar.hpp"
+```
+
+It does not expand macro includes or evaluate conditional compilation. Angle
+includes are treated as external in fast scan mode.
+
 ## Development
 
-Run the local checks:
+Run the CLI from a checkout:
+
+```bash
+cargo run -q -p cpp-include-insight -- scan . -I include
+cargo run -q -p cpp-include-insight -- report --base main --format markdown -I include
+```
+
+Run the local checks before sending changes:
 
 ```bash
 cargo fmt --all -- --check
@@ -164,18 +193,6 @@ Or use:
 ```bash
 just check
 ```
-
-## Limitations
-
-The current scanner supports direct includes:
-
-```cpp
-#include "app.h"
-#include <vector>
-# include "foo/bar.hpp"
-```
-
-It does not expand macro includes or evaluate conditional compilation. Angle includes are treated as external in fast scan mode.
 
 ## License
 
