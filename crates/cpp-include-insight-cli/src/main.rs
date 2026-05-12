@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use cpp_include_insight_core::{
     DEFAULT_MAX_WHY_PATHS, IncludeGraph, IncludeResolver, MermaidOptions, ScanOptions,
@@ -11,6 +11,7 @@ use cpp_include_insight_core::{
 use std::{
     fs,
     path::{Path, PathBuf},
+    process::Command as ProcessCommand,
 };
 
 #[derive(Debug, Parser)]
@@ -143,13 +144,15 @@ enum Command {
         absolute_paths: bool,
     },
 
-    /// Compare two include graph snapshots.
+    /// Compare include graph snapshots or Git revisions.
     Diff {
-        /// Older snapshot JSON file.
-        old: PathBuf,
+        /// Git revision range, or older and newer snapshot JSON files.
+        #[arg(value_name = "INPUT")]
+        inputs: Vec<String>,
 
-        /// Newer snapshot JSON file.
-        new: PathBuf,
+        /// Include directories used when diffing Git revisions.
+        #[arg(short = 'I', long = "include-dir")]
+        include_dirs: Vec<PathBuf>,
     },
 }
 
@@ -443,16 +446,162 @@ fn main() -> Result<()> {
             fs::write(output, format!("{json}\n"))?;
         }
 
-        Command::Diff { old, new } => {
-            let old = load_include_graph_snapshot(old)?;
-            let new = load_include_graph_snapshot(new)?;
-            let diff = diff_include_graph_snapshots(&old, &new)?;
+        Command::Diff {
+            inputs,
+            include_dirs,
+        } => {
+            let diff = match inputs.as_slice() {
+                [range] if is_git_revision_range(range) => {
+                    let (old, new) = snapshots_from_git_range(range, include_dirs)?;
+                    diff_include_graph_snapshots(&old, &new)?
+                }
+                [old, new] => {
+                    let old = load_include_graph_snapshot(old)?;
+                    let new = load_include_graph_snapshot(new)?;
+                    diff_include_graph_snapshots(&old, &new)?
+                }
+                _ => bail!(
+                    "usage: cpp-include-insight diff <old-snapshot.json> <new-snapshot.json> or cpp-include-insight diff <base...head> [-I include]"
+                ),
+            };
 
             print!("{}", render_snapshot_diff(&diff));
         }
     }
 
     Ok(())
+}
+
+fn snapshots_from_git_range(
+    range: &str,
+    include_dirs: Vec<PathBuf>,
+) -> Result<(
+    cpp_include_insight_core::IncludeGraphSnapshot,
+    cpp_include_insight_core::IncludeGraphSnapshot,
+)> {
+    let (old_revision, new_revision) = parse_git_revision_range(range)?;
+    let git_root = git_output(["rev-parse", "--show-toplevel"], None)?;
+    let git_root = PathBuf::from(git_root.trim());
+    let old_revision = if range.contains("...") {
+        git_output(["merge-base", old_revision, new_revision], Some(&git_root))?
+            .trim()
+            .to_owned()
+    } else {
+        old_revision.to_owned()
+    };
+
+    let temp = tempfile::tempdir().context("failed to create temporary Git archive directory")?;
+    let old_root = archive_git_revision(&git_root, &old_revision, temp.path().join("old"))?;
+    let new_root = archive_git_revision(&git_root, new_revision, temp.path().join("new"))?;
+    let old_snapshot = snapshot_project(&old_root, include_dirs.clone())?;
+    let new_snapshot = snapshot_project(&new_root, include_dirs)?;
+
+    Ok((old_snapshot, new_snapshot))
+}
+
+fn parse_git_revision_range(range: &str) -> Result<(&str, &str)> {
+    if let Some((old, new)) = range.split_once("...") {
+        validate_git_range_parts(range, old, new)?;
+        return Ok((old, new));
+    }
+
+    if let Some((old, new)) = range.split_once("..") {
+        validate_git_range_parts(range, old, new)?;
+        return Ok((old, new));
+    }
+
+    bail!("expected a Git revision range like main...HEAD or main..HEAD, found {range}");
+}
+
+fn validate_git_range_parts(range: &str, old: &str, new: &str) -> Result<()> {
+    if old.is_empty() || new.is_empty() {
+        bail!("expected both sides of Git revision range {range} to be non-empty");
+    }
+
+    Ok(())
+}
+
+fn is_git_revision_range(input: &str) -> bool {
+    input.contains("...") || input.contains("..")
+}
+
+fn archive_git_revision(git_root: &Path, revision: &str, output_dir: PathBuf) -> Result<PathBuf> {
+    fs::create_dir_all(&output_dir)
+        .with_context(|| format!("failed to create {}", output_dir.display()))?;
+
+    let tar_path = output_dir.with_extension("tar");
+    run_git(
+        [
+            "archive",
+            "--format=tar",
+            "--output",
+            tar_path
+                .to_str()
+                .context("temporary archive path is not valid UTF-8")?,
+            revision,
+        ],
+        git_root,
+    )
+    .with_context(|| format!("failed to archive Git revision {revision}"))?;
+
+    let output = ProcessCommand::new("tar")
+        .arg("-xf")
+        .arg(&tar_path)
+        .arg("-C")
+        .arg(&output_dir)
+        .output()
+        .with_context(|| format!("failed to extract {}", tar_path.display()))?;
+
+    if !output.status.success() {
+        bail!(
+            "tar failed while extracting {}:\n{}",
+            tar_path.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    Ok(output_dir)
+}
+
+fn snapshot_project(
+    root: &Path,
+    include_dirs: Vec<PathBuf>,
+) -> Result<cpp_include_insight_core::IncludeGraphSnapshot> {
+    let options = ScanOptions {
+        include_dirs: include_dirs.clone(),
+    };
+    let result = scan_project(root, &options)?;
+    let resolver = IncludeResolver::new(root, include_dirs);
+    let graph = IncludeGraph::from_scan_result(&result, &resolver);
+    let cycles = detect_include_cycles(&graph);
+
+    Ok(build_include_graph_snapshot(
+        &graph,
+        &cycles,
+        root,
+        SnapshotOptions::default(),
+    ))
+}
+
+fn git_output<const N: usize>(args: [&str; N], current_dir: Option<&Path>) -> Result<String> {
+    let mut command = ProcessCommand::new("git");
+    command.args(args);
+
+    if let Some(current_dir) = current_dir {
+        command.current_dir(current_dir);
+    }
+
+    let output = command.output().context("failed to run git")?;
+
+    if !output.status.success() {
+        bail!("git failed:\n{}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    String::from_utf8(output.stdout).context("git output was not valid UTF-8")
+}
+
+fn run_git<const N: usize>(args: [&str; N], current_dir: &Path) -> Result<()> {
+    git_output(args, Some(current_dir)).map(|_| ())
 }
 
 fn graph_input_context(path: &Path) -> Result<(PathBuf, Option<PathBuf>)> {

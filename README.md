@@ -56,6 +56,16 @@ cargo run -p cpp-include-insight -- why src/main.cpp include/config.h -I include
 cargo run -p cpp-include-insight -- impact include/config.h -I include
 ```
 
+Compare include graph changes between Git revisions:
+
+```bash
+cargo run -p cpp-include-insight -- diff main...HEAD -I include
+```
+
+`diff A...B` compares the merge-base of `A` and `B` against `B`. `diff A..B`
+compares `A` directly against `B`. Git revision diffs read committed content
+with `git archive`, so uncommitted worktree changes are not included.
+
 ## Development
 
 Run the local checks:
