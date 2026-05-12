@@ -3,9 +3,10 @@ use clap::{Parser, Subcommand, ValueEnum};
 use cpp_include_insight_core::{
     DEFAULT_MAX_WHY_PATHS, IncludeGraph, IncludeResolver, MermaidOptions, ScanOptions,
     SnapshotOptions, WhyOptions, analyze_include_impact, build_include_graph_snapshot,
-    detect_include_cycles, find_include_paths, graph_to_json_value, render_impact_result,
-    render_include_cycles, render_include_tree, render_mermaid_graph, render_reverse_include_tree,
-    render_why_result, scan_project,
+    detect_include_cycles, diff_include_graph_snapshots, find_include_paths, graph_to_json_value,
+    load_include_graph_snapshot, render_impact_result, render_include_cycles, render_include_tree,
+    render_mermaid_graph, render_reverse_include_tree, render_snapshot_diff, render_why_result,
+    scan_project,
 };
 use std::{
     fs,
@@ -140,6 +141,15 @@ enum Command {
         /// Store absolute paths instead of project-relative paths.
         #[arg(long = "absolute-paths")]
         absolute_paths: bool,
+    },
+
+    /// Compare two include graph snapshots.
+    Diff {
+        /// Older snapshot JSON file.
+        old: PathBuf,
+
+        /// Newer snapshot JSON file.
+        new: PathBuf,
     },
 }
 
@@ -431,6 +441,14 @@ fn main() -> Result<()> {
             }
 
             fs::write(output, format!("{json}\n"))?;
+        }
+
+        Command::Diff { old, new } => {
+            let old = load_include_graph_snapshot(old)?;
+            let new = load_include_graph_snapshot(new)?;
+            let diff = diff_include_graph_snapshots(&old, &new)?;
+
+            print!("{}", render_snapshot_diff(&diff));
         }
     }
 

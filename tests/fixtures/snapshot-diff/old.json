@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "root": {
+    "path": ".",
+    "path_style": "project_relative"
+  },
+  "stats": {
+    "files": 3,
+    "edges": 4,
+    "resolved": 2,
+    "external": 1,
+    "missing": 1,
+    "cycles": 0
+  },
+  "files": [
+    {
+      "path": "include/app.h"
+    },
+    {
+      "path": "include/old.h"
+    },
+    {
+      "path": "src/main.cpp"
+    }
+  ],
+  "edges": [
+    {
+      "from": "include/app.h",
+      "to": {
+        "type": "external",
+        "include": "string"
+      },
+      "include": "string",
+      "kind": "angle",
+      "line": 3
+    },
+    {
+      "from": "src/main.cpp",
+      "to": {
+        "type": "resolved",
+        "path": "include/app.h"
+      },
+      "include": "app.h",
+      "kind": "quote",
+      "line": 1
+    },
+    {
+      "from": "src/main.cpp",
+      "to": {
+        "type": "resolved",
+        "path": "include/old.h"
+      },
+      "include": "old.h",
+      "kind": "quote",
+      "line": 2
+    },
+    {
+      "from": "src/main.cpp",
+      "to": {
+        "type": "missing",
+        "include": "generated.h"
+      },
+      "include": "generated.h",
+      "kind": "quote",
+      "line": 3
+    }
+  ],
+  "cycles": []
+}

@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "root": {
+    "path": ".",
+    "path_style": "project_relative"
+  },
+  "stats": {
+    "files": 4,
+    "edges": 5,
+    "resolved": 3,
+    "external": 1,
+    "missing": 1,
+    "cycles": 0
+  },
+  "files": [
+    {
+      "path": "include/app.h"
+    },
+    {
+      "path": "include/generated.h"
+    },
+    {
+      "path": "include/new.h"
+    },
+    {
+      "path": "src/main.cpp"
+    }
+  ],
+  "edges": [
+    {
+      "from": "include/app.h",
+      "to": {
+        "type": "missing",
+        "include": "config.h"
+      },
+      "include": "config.h",
+      "kind": "quote",
+      "line": 2
+    },
+    {
+      "from": "include/app.h",
+      "to": {
+        "type": "external",
+        "include": "string"
+      },
+      "include": "string",
+      "kind": "angle",
+      "line": 3
+    },
+    {
+      "from": "src/main.cpp",
+      "to": {
+        "type": "resolved",
+        "path": "include/app.h"
+      },
+      "include": "app.h",
+      "kind": "quote",
+      "line": 1
+    },
+    {
+      "from": "src/main.cpp",
+      "to": {
+        "type": "resolved",
+        "path": "include/generated.h"
+      },
+      "include": "generated.h",
+      "kind": "quote",
+      "line": 3
+    },
+    {
+      "from": "src/main.cpp",
+      "to": {
+        "type": "resolved",
+        "path": "include/new.h"
+      },
+      "include": "new.h",
+      "kind": "quote",
+      "line": 4
+    }
+  ],
+  "cycles": []
+}

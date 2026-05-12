@@ -7,7 +7,7 @@ static INCLUDE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"^\s*#\s*include\s*([<"])([^>"]+)[>"]\s*(?://.*)?$"#).expect("valid include regax")
 });
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IncludeKind {
     Quote,
