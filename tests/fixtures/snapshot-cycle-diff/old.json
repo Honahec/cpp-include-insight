@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "root": {
+    "path": ".",
+    "path_style": "project_relative"
+  },
+  "stats": {
+    "files": 4,
+    "edges": 4,
+    "resolved": 4,
+    "external": 0,
+    "missing": 0,
+    "cycles": 2
+  },
+  "files": [
+    {
+      "path": "include/a.h"
+    },
+    {
+      "path": "include/b.h"
+    },
+    {
+      "path": "include/removed.h"
+    },
+    {
+      "path": "include/removed2.h"
+    }
+  ],
+  "edges": [
+    {
+      "from": "include/a.h",
+      "to": {
+        "type": "resolved",
+        "path": "include/b.h"
+      },
+      "include": "b.h",
+      "kind": "quote",
+      "line": 1
+    },
+    {
+      "from": "include/b.h",
+      "to": {
+        "type": "resolved",
+        "path": "include/a.h"
+      },
+      "include": "a.h",
+      "kind": "quote",
+      "line": 2
+    },
+    {
+      "from": "include/removed.h",
+      "to": {
+        "type": "resolved",
+        "path": "include/removed2.h"
+      },
+      "include": "removed2.h",
+      "kind": "quote",
+      "line": 3
+    },
+    {
+      "from": "include/removed2.h",
+      "to": {
+        "type": "resolved",
+        "path": "include/removed.h"
+      },
+      "include": "removed.h",
+      "kind": "quote",
+      "line": 4
+    }
+  ],
+  "cycles": [
+    {
+      "files": [
+        "include/a.h",
+        "include/b.h"
+      ],
+      "edges": [
+        {
+          "from": "include/a.h",
+          "to": "include/b.h",
+          "include": "b.h",
+          "line": 1
+        },
+        {
+          "from": "include/b.h",
+          "to": "include/a.h",
+          "include": "a.h",
+          "line": 2
+        }
+      ]
+    },
+    {
+      "files": [
+        "include/removed.h",
+        "include/removed2.h"
+      ],
+      "edges": [
+        {
+          "from": "include/removed.h",
+          "to": "include/removed2.h",
+          "include": "removed2.h",
+          "line": 3
+        },
+        {
+          "from": "include/removed2.h",
+          "to": "include/removed.h",
+          "include": "removed.h",
+          "line": 4
+        }
+      ]
+    }
+  ]
+}
