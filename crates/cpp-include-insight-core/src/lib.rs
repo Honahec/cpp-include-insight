@@ -15,9 +15,9 @@ pub use analysis::why::{
 };
 pub use graph::{FileId, FileNode, IncludeEdge, IncludeGraph, IncludeGraphStats, IncludeTarget};
 pub use output::diff::{
-    MissingIncludeChange, ResolvedDependencyChange, SnapshotCycleChange, SnapshotDiff,
-    diff_include_graph_snapshots, load_include_graph_snapshot, render_snapshot_diff,
-    validate_include_graph_snapshot,
+    ImpactDeltaChange, MissingIncludeChange, ResolvedDependencyChange, SnapshotCycleChange,
+    SnapshotDiff, diff_include_graph_snapshots, load_include_graph_snapshot, render_snapshot_diff,
+    render_snapshot_diff_with_impact, validate_include_graph_snapshot,
 };
 pub use output::json::graph_to_json_value;
 pub use output::mermaid::{MermaidOptions, render_mermaid_graph};

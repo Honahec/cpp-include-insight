@@ -756,6 +756,54 @@ fn diff_reports_new_cycles_without_repeating_unchanged_or_removed_cycles() {
 }
 
 #[test]
+fn diff_impact_reports_translation_unit_count_deltas() {
+    let fixture = fixture_path("snapshot-impact-diff");
+    let old = fixture.join("old.json");
+    let new = fixture.join("new.json");
+    let stdout = run_cli(&[
+        "diff",
+        old.to_str().unwrap(),
+        new.to_str().unwrap(),
+        "--impact",
+    ]);
+
+    assert_eq!(
+        stdout,
+        concat!(
+            "Snapshot diff summary:\n",
+            "Files: 8 -> 7 (-1)\n",
+            "Edges: 5 -> 5 (+0)\n",
+            "Resolved: 5 -> 5 (+0)\n",
+            "External: 0 -> 0 (+0)\n",
+            "Missing: 0 -> 0 (+0)\n",
+            "Cycles: 0 -> 0 (+0)\n",
+            "\n",
+            "Added resolved dependencies (1):\n",
+            "  src/server.cxx:1 -> include/config.h (include \"config.h\")\n",
+            "\n",
+            "Removed resolved dependencies (1):\n",
+            "  src/old.cpp:1 -> include/legacy.h (include \"legacy.h\")\n",
+            "\n",
+            "Newly missing includes (0):\n",
+            "  (none)\n",
+            "\n",
+            "Newly resolved includes (0):\n",
+            "  (none)\n",
+            "\n",
+            "New include cycles (0):\n",
+            "  (none)\n",
+            "\n",
+            "Impact increases (1):\n",
+            "  include/config.h: 2 -> 3 (+1 translation units)\n",
+            "\n",
+            "Impact decreases (1):\n",
+            "  include/legacy.h: 1 -> 0 (-1 translation units)\n",
+        )
+    );
+    assert!(!stdout.contains("include/stable.h:"));
+}
+
+#[test]
 fn diff_fail_on_new_cycle_exits_with_failure() {
     let fixture = fixture_path("snapshot-cycle-diff");
     let old = fixture.join("old.json");
