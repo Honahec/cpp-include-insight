@@ -691,3 +691,74 @@ fn diff_reports_snapshot_dependency_changes_in_stable_order() {
         )
     );
 }
+
+#[test]
+fn diff_reports_git_revision_dependency_changes() {
+    let repo = tempfile::tempdir().unwrap();
+    let repo_path = repo.path();
+
+    run_git(repo_path, &["init"]);
+    run_git(repo_path, &["config", "user.email", "test@example.com"]);
+    run_git(repo_path, &["config", "user.name", "Test User"]);
+    run_git(repo_path, &["config", "commit.gpgsign", "false"]);
+
+    fs::create_dir_all(repo_path.join("include")).unwrap();
+    fs::create_dir_all(repo_path.join("src")).unwrap();
+    fs::write(repo_path.join("include/app.h"), "").unwrap();
+    fs::write(repo_path.join("src/main.cpp"), "#include \"app.h\"\n").unwrap();
+    run_git(repo_path, &["add", "."]);
+    run_git(repo_path, &["commit", "-m", "initial include graph"]);
+
+    fs::write(repo_path.join("include/new.h"), "").unwrap();
+    fs::write(
+        repo_path.join("src/main.cpp"),
+        "#include \"app.h\"\n#include \"new.h\"\n",
+    )
+    .unwrap();
+    run_git(repo_path, &["add", "."]);
+    run_git(repo_path, &["commit", "-m", "add include"]);
+
+    let stdout = run_cli_in(&["diff", "HEAD~1...HEAD", "-I", "include"], Some(repo_path));
+
+    assert_eq!(
+        stdout,
+        concat!(
+            "Snapshot diff summary:\n",
+            "Files: 2 -> 3 (+1)\n",
+            "Edges: 1 -> 2 (+1)\n",
+            "Resolved: 1 -> 2 (+1)\n",
+            "External: 0 -> 0 (+0)\n",
+            "Missing: 0 -> 0 (+0)\n",
+            "Cycles: 0 -> 0 (+0)\n",
+            "\n",
+            "Added resolved dependencies (1):\n",
+            "  src/main.cpp:2 -> include/new.h (include \"new.h\")\n",
+            "\n",
+            "Removed resolved dependencies (0):\n",
+            "  (none)\n",
+            "\n",
+            "Newly missing includes (0):\n",
+            "  (none)\n",
+            "\n",
+            "Newly resolved includes (0):\n",
+            "  (none)\n",
+        )
+    );
+}
+
+fn run_git(current_dir: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(current_dir)
+        .output()
+        .expect("failed to run git");
+
+    assert!(
+        output.status.success(),
+        "git {:?} failed\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+        args,
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
