@@ -1136,6 +1136,35 @@ fn ci_fails_on_banned_include_rule() {
     assert!(stderr.contains("CI include checks failed"));
 }
 
+#[test]
+fn github_action_metadata_supports_pull_request_report_inputs() {
+    let action_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../action.yml");
+    let action = fs::read_to_string(action_path).unwrap();
+
+    assert!(action.contains("using: composite"));
+    assert!(action.contains("base:"));
+    assert!(action.contains("fail-on-new-cycle:"));
+    assert!(action.contains("comment:"));
+    assert!(action.contains("report-path:"));
+    assert!(action.contains("cargo build --locked --release"));
+    assert!(action.contains("report --base"));
+    assert!(action.contains("gh pr comment"));
+}
+
+#[test]
+fn include_insight_workflow_uses_full_checkout_and_comment_permissions() {
+    let workflow_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows/include-insight.yml");
+    let workflow = fs::read_to_string(workflow_path).unwrap();
+
+    assert!(workflow.contains("pull_request:"));
+    assert!(workflow.contains("pull-requests: write"));
+    assert!(workflow.contains("fetch-depth: 0"));
+    assert!(workflow.contains("fail-on-new-cycle: true"));
+    assert!(workflow.contains("comment: true"));
+    assert!(workflow.contains("actions/upload-artifact@v4"));
+}
+
 fn run_git(current_dir: &Path, args: &[&str]) {
     let output = Command::new("git")
         .args(args)

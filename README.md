@@ -93,6 +93,53 @@ root, and can also load an explicit path with `--config`:
 }
 ```
 
+## GitHub Action
+
+Run include graph checks on pull requests with the bundled GitHub Action. The
+checkout step must use `fetch-depth: 0` so Git revision diffs can find the base
+ref and merge base.
+
+```yaml
+name: Include Insight
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  include-insight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: Honahec/cpp-include-insight@v1
+        with:
+          base: origin/main
+          fail-on-new-cycle: true
+          comment: true
+```
+
+Inputs:
+
+| Input | Default | Description |
+| --- | --- | --- |
+| `base` | `origin/main` | Base Git revision or ref compared against `HEAD`. |
+| `include-dirs` | empty | Whitespace-separated include directories passed as `-I`. |
+| `config` | empty | Optional `cpp-include-insight.json` path for CI threshold rules. |
+| `fail-on-new-cycle` | `false` | Fail when the PR introduces a new project include cycle. |
+| `comment` | `false` | Post or update a pull request comment with the Markdown report. |
+| `report-path` | `cpp-include-insight-report.md` | Markdown report output path. |
+| `github-token` | `${{ github.token }}` | Token used for PR comments. |
+
+The action always writes a Markdown report and exposes it through the
+`report-path` and `report` outputs. Add `pull-requests: write` only when
+`comment: true`; otherwise `contents: read` is enough.
+
 ## Development
 
 Run the local checks:

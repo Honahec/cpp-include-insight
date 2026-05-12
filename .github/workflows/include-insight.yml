@@ -1,0 +1,32 @@
+name: Include Insight
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  include-insight:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Run include insight
+        id: include-insight
+        uses: ./
+        with:
+          base: origin/main
+          fail-on-new-cycle: true
+          comment: true
+
+      - name: Upload include insight report
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpp-include-insight-report
+          path: ${{ steps.include-insight.outputs.report-path }}

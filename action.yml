@@ -1,0 +1,130 @@
+name: cpp-include-insight
+description: Run cpp-include-insight include graph reports and CI checks on pull requests.
+
+inputs:
+  base:
+    description: Base Git revision or ref to compare against HEAD.
+    required: false
+    default: origin/main
+  include-dirs:
+    description: Whitespace-separated include directories passed as -I arguments.
+    required: false
+    default: ""
+  config:
+    description: Optional cpp-include-insight JSON config path for CI threshold rules.
+    required: false
+    default: ""
+  fail-on-new-cycle:
+    description: Fail the action when the include graph diff introduces a new project include cycle.
+    required: false
+    default: "false"
+  comment:
+    description: Post or update a pull request comment with the Markdown include graph report.
+    required: false
+    default: "false"
+  report-path:
+    description: Path where the Markdown include graph report should be written.
+    required: false
+    default: cpp-include-insight-report.md
+  github-token:
+    description: GitHub token used when comment is true.
+    required: false
+    default: ""
+
+outputs:
+  report-path:
+    description: Path to the generated Markdown report.
+    value: ${{ steps.report.outputs.report-path }}
+  report:
+    description: Generated Markdown report body.
+    value: ${{ steps.report.outputs.report }}
+
+runs:
+  using: composite
+  steps:
+    - name: Build cpp-include-insight
+      shell: bash
+      run: |
+        set -euo pipefail
+        cargo build --locked --release --manifest-path "$GITHUB_ACTION_PATH/crates/cpp-include-insight-cli/Cargo.toml"
+
+    - name: Generate include graph report
+      id: report
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        cli="$GITHUB_ACTION_PATH/target/release/cpp-include-insight"
+        report_path="${{ inputs.report-path }}"
+        include_args=()
+
+        for include_dir in ${{ inputs.include-dirs }}; do
+          include_args+=("-I" "$include_dir")
+        done
+
+        "$cli" report --base "${{ inputs.base }}" --format markdown "${include_args[@]}" > "$report_path"
+
+        {
+          echo "report-path=$report_path"
+          echo "report<<__CPP_INCLUDE_INSIGHT_REPORT__"
+          cat "$report_path"
+          echo "__CPP_INCLUDE_INSIGHT_REPORT__"
+        } >> "$GITHUB_OUTPUT"
+
+        cat "$report_path" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Run include graph CI checks
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        cli="$GITHUB_ACTION_PATH/target/release/cpp-include-insight"
+        include_args=()
+
+        for include_dir in ${{ inputs.include-dirs }}; do
+          include_args+=("-I" "$include_dir")
+        done
+
+        ci_args=(ci --base "${{ inputs.base }}")
+
+        if [[ -n "${{ inputs.config }}" ]]; then
+          ci_args+=(--config "${{ inputs.config }}")
+        elif [[ "${{ inputs.fail-on-new-cycle }}" == "true" ]]; then
+          generated_config="$RUNNER_TEMP/cpp-include-insight-action.json"
+          printf '{"ci":{"fail_on_new_cycle":true}}\n' > "$generated_config"
+          ci_args+=(--config "$generated_config")
+        else
+          echo "No include graph CI threshold inputs enabled."
+          exit 0
+        fi
+
+        "$cli" "${ci_args[@]}" "${include_args[@]}"
+
+    - name: Comment on pull request
+      if: ${{ inputs.comment == 'true' && github.event_name == 'pull_request' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token || github.token }}
+      run: |
+        set -euo pipefail
+
+        marker="<!-- cpp-include-insight-report -->"
+        body_file="$RUNNER_TEMP/cpp-include-insight-comment.md"
+        {
+          echo "$marker"
+          cat "${{ inputs.report-path }}"
+        } > "$body_file"
+
+        pr_number="${{ github.event.pull_request.number }}"
+        repository="${{ github.repository }}"
+        comment_id="$(
+          gh api "repos/$repository/issues/$pr_number/comments" \
+            --jq ".[] | select(.user.type == \"Bot\" and (.body | contains(\"$marker\"))) | .id" \
+            | head -n 1
+        )"
+
+        if [[ -n "$comment_id" ]]; then
+          gh api --method PATCH "repos/$repository/issues/comments/$comment_id" --field body=@"$body_file" >/dev/null
+        else
+          gh pr comment "$pr_number" --repo "$repository" --body-file "$body_file"
+        fi
