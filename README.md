@@ -97,7 +97,9 @@ root, and can also load an explicit path with `--config`:
 
 Run include graph checks on pull requests with the bundled GitHub Action. The
 checkout step must use `fetch-depth: 0` so Git revision diffs can find the base
-ref and merge base.
+ref and merge base. A complete workflow is available at
+`examples/.github/workflows/include-insight.yml`; copy it into your repository's
+`.github/workflows/` directory when you want to enable the action.
 
 ```yaml
 name: Include Insight

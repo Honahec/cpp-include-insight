@@ -1153,8 +1153,8 @@ fn github_action_metadata_supports_pull_request_report_inputs() {
 
 #[test]
 fn include_insight_workflow_uses_full_checkout_and_comment_permissions() {
-    let workflow_path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows/include-insight.yml");
+    let workflow_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/.github/workflows/include-insight.yml");
     let workflow = fs::read_to_string(workflow_path).unwrap();
 
     assert!(workflow.contains("pull_request:"));
