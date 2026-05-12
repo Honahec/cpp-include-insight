@@ -109,6 +109,8 @@ on:
 
 permissions:
   contents: read
+  # Required only when `comment: true`, so the action can create or update the
+  # stable cpp-include-insight pull request report comment.
   pull-requests: write
 
 jobs:
@@ -139,8 +141,12 @@ Inputs:
 | `github-token` | `${{ github.token }}` | Token used for PR comments. |
 
 The action always writes a Markdown report and exposes it through the
-`report-path` and `report` outputs. Add `pull-requests: write` only when
-`comment: true`; otherwise `contents: read` is enough.
+`report-path` and `report` outputs. When `comment: true`, the action creates a
+pull request comment containing `<!-- cpp-include-insight-report -->` and
+updates that same marked comment on reruns or force-pushes instead of posting
+duplicates. Add `pull-requests: write` only when `comment: true`; otherwise
+`contents: read` is enough. Missing or insufficient token permissions fail the
+comment step with a message that points back to this permission.
 
 ## Development
 

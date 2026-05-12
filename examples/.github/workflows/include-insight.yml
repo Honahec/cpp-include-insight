@@ -5,6 +5,7 @@ on:
 
 permissions:
   contents: read
+  # Required by the `comment: true` input so reruns can update one report comment.
   pull-requests: write
 
 jobs:
