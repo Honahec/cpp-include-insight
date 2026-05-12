@@ -1,0 +1,5 @@
+{
+  "ci": {
+    "fail_on_missing_include": true
+  }
+}

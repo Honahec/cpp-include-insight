@@ -1,0 +1,6 @@
+{
+  "include_dirs": ["include"],
+  "ci": {
+    "fail_on_new_cycle": true
+  }
+}

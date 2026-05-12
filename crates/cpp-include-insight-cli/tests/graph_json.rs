@@ -37,10 +37,18 @@ fn run_cli_in(args: &[&str], current_dir: Option<&Path>) -> String {
 }
 
 fn run_cli_failure(args: &[&str]) -> (String, String) {
-    let output = Command::new(env!("CARGO_BIN_EXE_cpp-include-insight"))
-        .args(args)
-        .output()
-        .expect("failed to run cpp-include-insight");
+    run_cli_failure_in(args, None)
+}
+
+fn run_cli_failure_in(args: &[&str], current_dir: Option<&Path>) -> (String, String) {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cpp-include-insight"));
+    command.args(args);
+
+    if let Some(current_dir) = current_dir {
+        command.current_dir(current_dir);
+    }
+
+    let output = command.output().expect("failed to run cpp-include-insight");
 
     assert!(
         !output.status.success(),
@@ -1062,6 +1070,70 @@ fn report_outputs_new_cycles_from_git_revision_diff() {
     assert!(stdout.contains("| Cycles | 0 | 1 | +1 |"));
     assert!(stdout.contains("## New cycles (1)"));
     assert!(stdout.contains("- `include/a.h:1 -> include/b.h:1 -> include/a.h`"));
+}
+
+#[test]
+fn ci_passes_when_configured_rules_are_within_thresholds() {
+    let repo = init_git_repo_with_fixture_pair("ci-pass");
+    let stdout = run_cli_in(&["ci", "--base", "HEAD~1"], Some(repo.path()));
+
+    assert_eq!(
+        stdout,
+        concat!(
+            "CI include checks passed.\n",
+            "Checked 1 new edge(s), 0 newly missing include(s), 0 new cycle(s), 1 impact delta(s).\n",
+        )
+    );
+}
+
+#[test]
+fn ci_fails_on_new_cycle() {
+    let repo = init_git_repo_with_fixture_pair("ci-new-cycle");
+    let (stdout, stderr) = run_cli_failure_in(&["ci", "--base", "HEAD~1"], Some(repo.path()));
+
+    assert!(stdout.contains("CI include checks failed (1):"));
+    assert!(stdout.contains("- fail_on_new_cycle: introduced 1 new include cycle(s)"));
+    assert!(stderr.contains("CI include checks failed"));
+}
+
+#[test]
+fn ci_fails_on_newly_missing_include() {
+    let repo = init_git_repo_with_fixture_pair("ci-missing");
+    let (stdout, stderr) = run_cli_failure_in(&["ci", "--base", "HEAD~1"], Some(repo.path()));
+
+    assert!(stdout.contains("- fail_on_missing_include: introduced 1 newly missing include(s)"));
+    assert!(stderr.contains("CI include checks failed"));
+}
+
+#[test]
+fn ci_fails_on_max_impact_delta() {
+    let repo = init_git_repo_with_fixture_pair("ci-impact-delta");
+    let (stdout, stderr) = run_cli_failure_in(&["ci", "--base", "HEAD~1"], Some(repo.path()));
+
+    assert!(stdout.contains("- max_impact_delta: 1 header impact delta(s) exceeded limit 0"));
+    assert!(stdout.contains("include/config.h (+1)"));
+    assert!(stderr.contains("CI include checks failed"));
+}
+
+#[test]
+fn ci_fails_on_max_new_edges() {
+    let repo = init_git_repo_with_fixture_pair("ci-max-new-edges");
+    let (stdout, stderr) = run_cli_failure_in(&["ci", "--base", "HEAD~1"], Some(repo.path()));
+
+    assert!(
+        stdout.contains("- max_new_edges: added 2 resolved include edge(s), exceeding limit 1")
+    );
+    assert!(stderr.contains("CI include checks failed"));
+}
+
+#[test]
+fn ci_fails_on_banned_include_rule() {
+    let repo = init_git_repo_with_fixture_pair("ci-banned");
+    let (stdout, stderr) = run_cli_failure_in(&["ci", "--base", "HEAD~1"], Some(repo.path()));
+
+    assert!(stdout.contains("- banned_includes: include/public/api.h:1 added banned include edge to src/private/detail.h"));
+    assert!(stdout.contains("public headers must not include private headers"));
+    assert!(stderr.contains("CI include checks failed"));
 }
 
 fn run_git(current_dir: &Path, args: &[&str]) {

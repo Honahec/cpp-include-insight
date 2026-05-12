@@ -3,10 +3,11 @@ use clap::{Parser, Subcommand, ValueEnum};
 use cpp_include_insight_core::{
     DEFAULT_MAX_WHY_PATHS, IncludeGraph, IncludeResolver, MermaidOptions, ScanOptions,
     SnapshotOptions, WhyOptions, analyze_include_impact, build_include_graph_snapshot,
-    detect_include_cycles, diff_include_graph_snapshots, find_include_paths, graph_to_json_value,
-    load_include_graph_snapshot, render_impact_result, render_include_cycles, render_include_tree,
-    render_markdown_report, render_mermaid_graph, render_reverse_include_tree,
-    render_snapshot_diff, render_snapshot_diff_with_impact, render_why_result, scan_project,
+    detect_include_cycles, diff_include_graph_snapshots, evaluate_ci_rules, find_include_paths,
+    graph_to_json_value, load_include_graph_snapshot, render_ci_check_report, render_impact_result,
+    render_include_cycles, render_include_tree, render_markdown_report, render_mermaid_graph,
+    render_reverse_include_tree, render_snapshot_diff, render_snapshot_diff_with_impact,
+    render_why_result, scan_project,
 };
 use std::{
     fs,
@@ -176,6 +177,21 @@ enum Command {
         /// Output format.
         #[arg(long, value_enum, default_value_t = ReportOutputFormat::Markdown)]
         format: ReportOutputFormat,
+    },
+
+    /// Evaluate include graph diffs against CI rules from project config.
+    Ci {
+        /// Base Git revision to compare against HEAD.
+        #[arg(long, default_value = "main")]
+        base: String,
+
+        /// Project config JSON. Defaults to cpp-include-insight.json when present.
+        #[arg(long)]
+        config: Option<PathBuf>,
+
+        /// Include directories used when diffing Git revisions.
+        #[arg(short = 'I', long = "include-dir")]
+        include_dirs: Vec<PathBuf>,
     },
 }
 
@@ -526,9 +542,67 @@ fn main() -> Result<()> {
                 ReportOutputFormat::Markdown => print!("{}", render_markdown_report(&diff)),
             }
         }
+
+        Command::Ci {
+            base,
+            config,
+            include_dirs,
+        } => {
+            if base.is_empty() {
+                bail!("--base must not be empty");
+            }
+
+            let git_root = git_root()?;
+            let project_config = load_project_config(config.as_deref(), &git_root)?;
+            let include_dirs =
+                merged_include_dirs(project_config.include_dirs.clone(), include_dirs);
+            let range = format!("{base}...HEAD");
+            let (old, new) = snapshots_from_git_range(&range, include_dirs)?;
+            let diff = diff_include_graph_snapshots(&old, &new)?;
+            let report = evaluate_ci_rules(&diff, &project_config);
+
+            print!("{}", render_ci_check_report(&report));
+
+            if !report.passed() {
+                bail!("CI include checks failed");
+            }
+        }
     }
 
     Ok(())
+}
+
+fn load_project_config(
+    config_path: Option<&Path>,
+    git_root: &Path,
+) -> Result<cpp_include_insight_core::ProjectConfig> {
+    let Some(path) = config_path
+        .map(Path::to_path_buf)
+        .or_else(|| default_project_config_path(git_root))
+    else {
+        return Ok(cpp_include_insight_core::ProjectConfig::default());
+    };
+
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read project config {}", path.display()))?;
+    serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse project config {}", path.display()))
+}
+
+fn default_project_config_path(git_root: &Path) -> Option<PathBuf> {
+    [
+        "cpp-include-insight.json",
+        ".cpp-include-insight.json",
+        ".cpp-include-insight/ci.json",
+    ]
+    .into_iter()
+    .map(|path| git_root.join(path))
+    .find(|path| path.is_file())
+}
+
+fn merged_include_dirs(mut config_dirs: Vec<PathBuf>, cli_dirs: Vec<PathBuf>) -> Vec<PathBuf> {
+    config_dirs.extend(cli_dirs);
+    config_dirs
 }
 
 fn snapshots_from_git_range(
@@ -539,8 +613,7 @@ fn snapshots_from_git_range(
     cpp_include_insight_core::IncludeGraphSnapshot,
 )> {
     let (old_revision, new_revision) = parse_git_revision_range(range)?;
-    let git_root = git_output(["rev-parse", "--show-toplevel"], None)?;
-    let git_root = PathBuf::from(git_root.trim());
+    let git_root = git_root()?;
     let old_revision = if range.contains("...") {
         git_output(["merge-base", old_revision, new_revision], Some(&git_root))?
             .trim()
@@ -556,6 +629,11 @@ fn snapshots_from_git_range(
     let new_snapshot = snapshot_project(&new_root, include_dirs)?;
 
     Ok((old_snapshot, new_snapshot))
+}
+
+fn git_root() -> Result<PathBuf> {
+    let output = git_output(["rev-parse", "--show-toplevel"], None)?;
+    Ok(PathBuf::from(output.trim()))
 }
 
 fn parse_git_revision_range(range: &str) -> Result<(&str, &str)> {

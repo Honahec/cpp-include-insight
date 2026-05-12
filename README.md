@@ -61,6 +61,7 @@ Compare include graph changes between Git revisions:
 ```bash
 cargo run -p cpp-include-insight -- diff main...HEAD -I include
 cargo run -p cpp-include-insight -- diff main...HEAD -I include --fail-on-new-cycle
+cargo run -p cpp-include-insight -- ci --base main
 ```
 
 `diff A...B` compares the merge-base of `A` and `B` against `B`. `diff A..B`
@@ -68,6 +69,29 @@ compares `A` directly against `B`. Git revision diffs read committed content
 with `git archive`, so uncommitted worktree changes are not included. Use
 `--fail-on-new-cycle` to make CI fail when the diff introduces a new include
 cycle.
+
+The `ci` command reads `cpp-include-insight.json`,
+`.cpp-include-insight.json`, or `.cpp-include-insight/ci.json` from the Git
+root, and can also load an explicit path with `--config`:
+
+```json
+{
+  "include_dirs": ["include"],
+  "ci": {
+    "fail_on_new_cycle": true,
+    "fail_on_missing_include": true,
+    "max_impact_delta": 3,
+    "max_new_edges": 10,
+    "banned_includes": [
+      {
+        "from": "include/public/**",
+        "to": "src/private/**",
+        "reason": "public headers must not include private headers"
+      }
+    ]
+  }
+}
+```
 
 ## Development
 

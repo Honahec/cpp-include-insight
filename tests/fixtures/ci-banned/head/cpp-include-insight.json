@@ -1,0 +1,12 @@
+{
+  "include_dirs": ["include", "src"],
+  "ci": {
+    "banned_includes": [
+      {
+        "from": "include/public/**",
+        "to": "src/private/**",
+        "reason": "public headers must not include private headers"
+      }
+    ]
+  }
+}
