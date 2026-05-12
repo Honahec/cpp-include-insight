@@ -5,8 +5,8 @@ use cpp_include_insight_core::{
     SnapshotOptions, WhyOptions, analyze_include_impact, build_include_graph_snapshot,
     detect_include_cycles, diff_include_graph_snapshots, find_include_paths, graph_to_json_value,
     load_include_graph_snapshot, render_impact_result, render_include_cycles, render_include_tree,
-    render_mermaid_graph, render_reverse_include_tree, render_snapshot_diff,
-    render_snapshot_diff_with_impact, render_why_result, scan_project,
+    render_markdown_report, render_mermaid_graph, render_reverse_include_tree,
+    render_snapshot_diff, render_snapshot_diff_with_impact, render_why_result, scan_project,
 };
 use std::{
     fs,
@@ -162,6 +162,21 @@ enum Command {
         #[arg(long = "impact")]
         impact: bool,
     },
+
+    /// Render a Markdown include graph diff report for pull requests.
+    Report {
+        /// Base Git revision to compare against HEAD.
+        #[arg(long, default_value = "main")]
+        base: String,
+
+        /// Include directories used when diffing Git revisions.
+        #[arg(short = 'I', long = "include-dir")]
+        include_dirs: Vec<PathBuf>,
+
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = ReportOutputFormat::Markdown)]
+        format: ReportOutputFormat,
+    },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -174,6 +189,11 @@ enum OutputFormat {
 enum GraphOutputFormat {
     Json,
     Mermaid,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ReportOutputFormat {
+    Markdown,
 }
 
 fn parse_positive_usize(value: &str) -> std::result::Result<usize, String> {
@@ -486,6 +506,24 @@ fn main() -> Result<()> {
                     "include graph diff introduced {} new cycle(s)",
                     diff.new_cycles.len()
                 );
+            }
+        }
+
+        Command::Report {
+            base,
+            include_dirs,
+            format,
+        } => {
+            if base.is_empty() {
+                bail!("--base must not be empty");
+            }
+
+            let range = format!("{base}...HEAD");
+            let (old, new) = snapshots_from_git_range(&range, include_dirs)?;
+            let diff = diff_include_graph_snapshots(&old, &new)?;
+
+            match format {
+                ReportOutputFormat::Markdown => print!("{}", render_markdown_report(&diff)),
             }
         }
     }

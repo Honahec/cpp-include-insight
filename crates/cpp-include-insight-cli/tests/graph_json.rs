@@ -55,6 +55,67 @@ fn run_cli_failure(args: &[&str]) -> (String, String) {
     )
 }
 
+fn init_git_repo_with_fixture_pair(fixture_name: &str) -> tempfile::TempDir {
+    let repo = tempfile::tempdir().unwrap();
+    let repo_path = repo.path();
+
+    run_git(repo_path, &["init"]);
+    run_git(repo_path, &["config", "user.email", "test@example.com"]);
+    run_git(repo_path, &["config", "user.name", "Test User"]);
+    run_git(repo_path, &["config", "commit.gpgsign", "false"]);
+
+    replace_worktree_with_fixture(repo_path, &fixture_path(fixture_name).join("base"));
+    run_git(repo_path, &["add", "."]);
+    run_git(repo_path, &["commit", "-m", "base include graph"]);
+
+    replace_worktree_with_fixture(repo_path, &fixture_path(fixture_name).join("head"));
+    run_git(repo_path, &["add", "-A", "."]);
+    run_git(
+        repo_path,
+        &["commit", "--allow-empty", "-m", "head include graph"],
+    );
+
+    repo
+}
+
+fn replace_worktree_with_fixture(repo_path: &Path, fixture_path: &Path) {
+    clear_worktree(repo_path);
+    copy_fixture_tree(fixture_path, repo_path);
+}
+
+fn clear_worktree(path: &Path) {
+    for entry in fs::read_dir(path).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+
+        if path.file_name().is_some_and(|name| name == ".git") {
+            continue;
+        }
+
+        if path.is_dir() {
+            fs::remove_dir_all(path).unwrap();
+        } else {
+            fs::remove_file(path).unwrap();
+        }
+    }
+}
+
+fn copy_fixture_tree(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let source = entry.path();
+        let target = to.join(entry.file_name());
+
+        if source.is_dir() {
+            copy_fixture_tree(&source, &target);
+        } else {
+            fs::copy(source, target).unwrap();
+        }
+    }
+}
+
 #[test]
 fn graph_json_outputs_files_edges_missing_and_external_for_simple_fixture() {
     let fixture = fixture_path("simple");
@@ -874,6 +935,133 @@ fn diff_reports_git_revision_dependency_changes() {
             "  (none)\n",
         )
     );
+}
+
+#[test]
+fn report_outputs_markdown_for_git_revision_diff() {
+    let repo = init_git_repo_with_fixture_pair("report-basic");
+    let stdout = run_cli_in(
+        &[
+            "report", "--base", "HEAD~1", "--format", "markdown", "-I", "include",
+        ],
+        Some(repo.path()),
+    );
+
+    assert_eq!(
+        stdout,
+        concat!(
+            "# Include Graph Report\n",
+            "\n",
+            "## Summary\n",
+            "\n",
+            "| Metric | Base | Head | Delta |\n",
+            "| --- | ---: | ---: | ---: |\n",
+            "| Files | 3 | 4 | +1 |\n",
+            "| Include edges | 3 | 4 | +1 |\n",
+            "| Missing includes | 1 | 1 | +0 |\n",
+            "| Cycles | 0 | 0 | +0 |\n",
+            "\n",
+            "## New include edges (2)\n",
+            "\n",
+            "- `src/main.cpp:2` -> `include/generated.h` via `\"generated.h\"`\n",
+            "- `src/main.cpp:3` -> `include/new.h` via `\"new.h\"`\n",
+            "\n",
+            "## Removed include edges (1)\n",
+            "\n",
+            "- `src/main.cpp:2` -> `include/old.h` via `\"old.h\"`\n",
+            "\n",
+            "## Newly missing includes (1)\n",
+            "\n",
+            "- `include/app.h:1` now misses `\"config.h\"`\n",
+            "\n",
+            "## Newly resolved includes (1)\n",
+            "\n",
+            "- `src/main.cpp:2` -> `include/generated.h` via `\"generated.h\"`\n",
+            "\n",
+            "## New cycles (0)\n",
+            "\n",
+            "No changes.\n",
+            "\n",
+            "## Impact increases (2)\n",
+            "\n",
+            "- `include/generated.h`: 0 -> 1 (+1 translation units)\n",
+            "- `include/new.h`: 0 -> 1 (+1 translation units)\n",
+            "\n",
+            "## Impact decreases (1)\n",
+            "\n",
+            "- `include/old.h`: 1 -> 0 (-1 translation units)\n",
+        )
+    );
+}
+
+#[test]
+fn report_outputs_no_changes_for_empty_git_revision_diff() {
+    let repo = init_git_repo_with_fixture_pair("report-no-change");
+    let stdout = run_cli_in(
+        &[
+            "report", "--base", "HEAD~1", "--format", "markdown", "-I", "include",
+        ],
+        Some(repo.path()),
+    );
+
+    assert_eq!(
+        stdout,
+        concat!(
+            "# Include Graph Report\n",
+            "\n",
+            "## Summary\n",
+            "\n",
+            "| Metric | Base | Head | Delta |\n",
+            "| --- | ---: | ---: | ---: |\n",
+            "| Files | 2 | 2 | +0 |\n",
+            "| Include edges | 1 | 1 | +0 |\n",
+            "| Missing includes | 0 | 0 | +0 |\n",
+            "| Cycles | 0 | 0 | +0 |\n",
+            "\n",
+            "## New include edges (0)\n",
+            "\n",
+            "No changes.\n",
+            "\n",
+            "## Removed include edges (0)\n",
+            "\n",
+            "No changes.\n",
+            "\n",
+            "## Newly missing includes (0)\n",
+            "\n",
+            "No changes.\n",
+            "\n",
+            "## Newly resolved includes (0)\n",
+            "\n",
+            "No changes.\n",
+            "\n",
+            "## New cycles (0)\n",
+            "\n",
+            "No changes.\n",
+            "\n",
+            "## Impact increases (0)\n",
+            "\n",
+            "No changes.\n",
+            "\n",
+            "## Impact decreases (0)\n",
+            "\n",
+            "No changes.\n",
+        )
+    );
+}
+
+#[test]
+fn report_outputs_new_cycles_from_git_revision_diff() {
+    let repo = init_git_repo_with_fixture_pair("report-cycle");
+    let stdout = run_cli_in(
+        &[
+            "report", "--base", "HEAD~1", "--format", "markdown", "-I", "include",
+        ],
+        Some(repo.path()),
+    );
+
+    assert!(stdout.contains("| Cycles | 0 | 1 | +1 |"));
+    assert!(stdout.contains("## New cycles (1)"));
+    assert!(stdout.contains("- `include/a.h:1 -> include/b.h:1 -> include/a.h`"));
 }
 
 fn run_git(current_dir: &Path, args: &[&str]) {
