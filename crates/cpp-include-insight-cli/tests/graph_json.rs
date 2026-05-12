@@ -1,5 +1,6 @@
 use serde_json::Value;
 use std::{
+    fs,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -533,5 +534,126 @@ fn impact_reports_direct_transitive_and_translation_unit_dependants() {
             "  src/main.cpp\n",
             "  src/server.cxx\n",
         )
+    );
+}
+
+#[test]
+fn snapshot_writes_project_relative_versioned_json() {
+    let fixture = fixture_path("simple");
+    let output_dir = tempfile::tempdir().unwrap();
+    let output_file = output_dir.path().join("include-graph.json");
+    let output_file_arg = output_file.to_str().unwrap();
+    let fixture_arg = fixture.to_str().unwrap();
+
+    let stdout = run_cli(&[
+        "snapshot",
+        fixture_arg,
+        "-I",
+        "include",
+        "-o",
+        output_file_arg,
+    ]);
+
+    assert_eq!(stdout, "");
+
+    let json: Value = serde_json::from_str(&fs::read_to_string(&output_file).unwrap()).unwrap();
+
+    assert_eq!(json["version"], 1);
+    assert_eq!(
+        json["root"],
+        serde_json::json!({
+            "path": ".",
+            "path_style": "project_relative",
+        })
+    );
+    assert_eq!(
+        json["stats"],
+        serde_json::json!({
+            "files": 3,
+            "edges": 5,
+            "resolved": 2,
+            "external": 3,
+            "missing": 0,
+            "cycles": 0,
+        })
+    );
+    assert_eq!(
+        json["files"],
+        serde_json::json!([
+            { "path": "include/app.h" },
+            { "path": "src/local.h" },
+            { "path": "src/main.cpp" },
+        ])
+    );
+
+    let edges = json["edges"].as_array().unwrap();
+    assert_eq!(edges[0]["from"], "include/app.h");
+    assert_eq!(
+        edges[0]["to"],
+        serde_json::json!({ "type": "external", "include": "string" })
+    );
+    assert_eq!(edges[1]["include"], "math.h");
+    assert_eq!(edges[2]["include"], "app.h");
+    assert_eq!(
+        edges[2]["to"],
+        serde_json::json!({ "type": "resolved", "path": "include/app.h" })
+    );
+    assert_eq!(json["cycles"], serde_json::json!([]));
+
+    let serialized = fs::read_to_string(&output_file).unwrap();
+    assert!(!serialized.contains(fixture_arg));
+}
+
+#[test]
+fn snapshot_output_is_deterministic_and_includes_cycles() {
+    let fixture = fixture_path("tree-cycle");
+    let output_dir = tempfile::tempdir().unwrap();
+    let first_output = output_dir.path().join("first.json");
+    let second_output = output_dir.path().join("second.json");
+    let fixture_arg = fixture.to_str().unwrap();
+
+    run_cli(&[
+        "snapshot",
+        fixture_arg,
+        "-I",
+        "include",
+        "-o",
+        first_output.to_str().unwrap(),
+    ]);
+    run_cli(&[
+        "snapshot",
+        fixture_arg,
+        "-I",
+        "include",
+        "-o",
+        second_output.to_str().unwrap(),
+    ]);
+
+    let first = fs::read_to_string(first_output).unwrap();
+    let second = fs::read_to_string(second_output).unwrap();
+    assert_eq!(first, second);
+
+    let json: Value = serde_json::from_str(&first).unwrap();
+    assert_eq!(json["stats"]["cycles"], 1);
+    assert_eq!(
+        json["cycles"][0]["files"],
+        serde_json::json!(["include/a.h", "include/b.h"])
+    );
+    assert_eq!(
+        json["cycles"][0]["edges"],
+        serde_json::json!([
+            {
+                "from": "include/a.h",
+                "to": "include/b.h",
+                "include": "b.h",
+                "line": 3,
+            },
+            {
+                "from": "include/b.h",
+                "to": "include/a.h",
+                "include": "a.h",
+                "line": 3,
+            },
+        ])
     );
 }

@@ -1,12 +1,16 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use cpp_include_insight_core::{
-    DEFAULT_MAX_WHY_PATHS, IncludeGraph, IncludeResolver, MermaidOptions, ScanOptions, WhyOptions,
-    analyze_include_impact, detect_include_cycles, find_include_paths, graph_to_json_value,
-    render_impact_result, render_include_cycles, render_include_tree, render_mermaid_graph,
-    render_reverse_include_tree, render_why_result, scan_project,
+    DEFAULT_MAX_WHY_PATHS, IncludeGraph, IncludeResolver, MermaidOptions, ScanOptions,
+    SnapshotOptions, WhyOptions, analyze_include_impact, build_include_graph_snapshot,
+    detect_include_cycles, find_include_paths, graph_to_json_value, render_impact_result,
+    render_include_cycles, render_include_tree, render_mermaid_graph, render_reverse_include_tree,
+    render_why_result, scan_project,
 };
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "cpp-include-insight")]
@@ -118,6 +122,24 @@ enum Command {
         /// Include directories.
         #[arg(short = 'I', long = "include-dir")]
         include_dirs: Vec<PathBuf>,
+    },
+
+    /// Write a stable, versioned include graph snapshot.
+    Snapshot {
+        /// Project root
+        path: PathBuf,
+
+        /// Include directories.
+        #[arg(short = 'I', long = "include-dir")]
+        include_dirs: Vec<PathBuf>,
+
+        /// Snapshot output file.
+        #[arg(short = 'o', long = "output")]
+        output: PathBuf,
+
+        /// Store absolute paths instead of project-relative paths.
+        #[arg(long = "absolute-paths")]
+        absolute_paths: bool,
     },
 }
 
@@ -378,6 +400,37 @@ fn main() -> Result<()> {
             let impact = analyze_include_impact(&graph, target_id);
 
             print!("{}", render_impact_result(&graph, &impact, &project_root));
+        }
+
+        Command::Snapshot {
+            path,
+            include_dirs,
+            output,
+            absolute_paths,
+        } => {
+            let options = ScanOptions {
+                include_dirs: include_dirs.clone(),
+            };
+            let result = scan_project(&path, &options)?;
+            let resolver = IncludeResolver::new(&path, include_dirs);
+            let graph = IncludeGraph::from_scan_result(&result, &resolver);
+            let cycles = detect_include_cycles(&graph);
+            let snapshot = build_include_graph_snapshot(
+                &graph,
+                &cycles,
+                &path,
+                SnapshotOptions { absolute_paths },
+            );
+            let json = serde_json::to_string_pretty(&snapshot)?;
+
+            if let Some(parent) = output
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                fs::create_dir_all(parent)?;
+            }
+
+            fs::write(output, format!("{json}\n"))?;
         }
     }
 
