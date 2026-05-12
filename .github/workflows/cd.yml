@@ -106,29 +106,28 @@ jobs:
           publish_if_needed() {
             local package="$1"
             local crate="$2"
+            local output
 
             if crate_version_exists "$crate"; then
               echo "${crate} ${version} is already published; skipping."
               return
             fi
 
-            cargo publish -p "$package"
-          }
+            if output="$(cargo publish -p "$package" 2>&1)"; then
+              printf '%s\n' "$output"
+              return
+            else
+              local status="$?"
+              printf '%s\n' "$output"
 
-          wait_for_crate_version() {
-            local crate="$1"
-
-            for _ in {1..30}; do
-              if crate_version_exists "$crate"; then
+              if grep -Eq "crate ${crate}@${version} already exists|already exists on crates.io" <<< "$output"; then
+                echo "${crate} ${version} is already published; continuing."
                 return
               fi
-              sleep 10
-            done
 
-            echo "${crate} ${version} did not become visible on crates.io in time" >&2
-            exit 1
+              return "$status"
+            fi
           }
 
           publish_if_needed "cpp-include-insight-core" "cpp-include-insight-core"
-          wait_for_crate_version "cpp-include-insight-core"
           publish_if_needed "cpp-include-insight" "cpp-include-insight"
