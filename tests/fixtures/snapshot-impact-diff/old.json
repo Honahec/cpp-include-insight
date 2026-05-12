@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "root": {
+    "path": ".",
+    "path_style": "project_relative"
+  },
+  "stats": {
+    "files": 8,
+    "edges": 5,
+    "resolved": 5,
+    "external": 0,
+    "missing": 0,
+    "cycles": 0
+  },
+  "files": [
+    {
+      "path": "include/app.h"
+    },
+    {
+      "path": "include/config.h"
+    },
+    {
+      "path": "include/legacy.h"
+    },
+    {
+      "path": "include/stable.h"
+    },
+    {
+      "path": "src/main.cpp"
+    },
+    {
+      "path": "src/old.cpp"
+    },
+    {
+      "path": "src/stable.cpp"
+    },
+    {
+      "path": "src/worker.cc"
+    }
+  ],
+  "edges": [
+    {
+      "from": "include/app.h",
+      "to": {
+        "type": "resolved",
+        "path": "include/config.h"
+      },
+      "include": "config.h",
+      "kind": "quote",
+      "line": 1
+    },
+    {
+      "from": "src/main.cpp",
+      "to": {
+        "type": "resolved",
+        "path": "include/app.h"
+      },
+      "include": "app.h",
+      "kind": "quote",
+      "line": 1
+    },
+    {
+      "from": "src/old.cpp",
+      "to": {
+        "type": "resolved",
+        "path": "include/legacy.h"
+      },
+      "include": "legacy.h",
+      "kind": "quote",
+      "line": 1
+    },
+    {
+      "from": "src/stable.cpp",
+      "to": {
+        "type": "resolved",
+        "path": "include/stable.h"
+      },
+      "include": "stable.h",
+      "kind": "quote",
+      "line": 1
+    },
+    {
+      "from": "src/worker.cc",
+      "to": {
+        "type": "resolved",
+        "path": "include/config.h"
+      },
+      "include": "config.h",
+      "kind": "quote",
+      "line": 1
+    }
+  ],
+  "cycles": []
+}

@@ -1,16 +1,19 @@
 use crate::{
     IncludeGraphSnapshot, IncludeKind, SNAPSHOT_VERSION,
+    analysis::impact::{FileKind, classify_file},
     output::snapshot::{
         SnapshotCycle, SnapshotCycleEdge, SnapshotEdge, SnapshotStats, SnapshotTarget,
     },
 };
 use anyhow::{Context, Result, bail};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fmt::Write as _,
     fs,
     path::Path,
 };
+
+const DEFAULT_MAX_IMPACT_DELTA_CHANGES: usize = 20;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotDiff {
@@ -21,6 +24,7 @@ pub struct SnapshotDiff {
     pub newly_missing: Vec<MissingIncludeChange>,
     pub newly_resolved: Vec<ResolvedDependencyChange>,
     pub new_cycles: Vec<SnapshotCycleChange>,
+    pub impact_deltas: Vec<ImpactDeltaChange>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +48,14 @@ pub struct MissingIncludeChange {
 pub struct SnapshotCycleChange {
     pub files: Vec<String>,
     pub edges: Vec<SnapshotCycleEdge>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImpactDeltaChange {
+    pub header: String,
+    pub old_translation_units: usize,
+    pub new_translation_units: usize,
+    pub delta: isize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -219,6 +231,7 @@ pub fn diff_include_graph_snapshots(
         newly_missing,
         newly_resolved,
         new_cycles,
+        impact_deltas: impact_delta_changes(old, new),
     })
 }
 
@@ -278,6 +291,93 @@ pub fn render_snapshot_diff(diff: &SnapshotDiff) -> String {
     write_cycle_section(&mut output, "New include cycles", &diff.new_cycles);
 
     output
+}
+
+pub fn render_snapshot_diff_with_impact(diff: &SnapshotDiff) -> String {
+    let mut output = render_snapshot_diff(diff);
+    write_impact_delta_sections(&mut output, &diff.impact_deltas);
+    output
+}
+
+fn impact_delta_changes(
+    old: &IncludeGraphSnapshot,
+    new: &IncludeGraphSnapshot,
+) -> Vec<ImpactDeltaChange> {
+    let old_counts = snapshot_header_impact_counts(old);
+    let new_counts = snapshot_header_impact_counts(new);
+    let headers = old_counts
+        .keys()
+        .chain(new_counts.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+
+    headers
+        .into_iter()
+        .filter_map(|header| {
+            let old_translation_units = old_counts.get(&header).copied().unwrap_or(0);
+            let new_translation_units = new_counts.get(&header).copied().unwrap_or(0);
+            let delta = new_translation_units as isize - old_translation_units as isize;
+
+            (delta != 0).then_some(ImpactDeltaChange {
+                header,
+                old_translation_units,
+                new_translation_units,
+                delta,
+            })
+        })
+        .collect()
+}
+
+fn snapshot_header_impact_counts(snapshot: &IncludeGraphSnapshot) -> BTreeMap<String, usize> {
+    let headers = snapshot
+        .files
+        .iter()
+        .map(|file| file.path.as_str())
+        .filter(|path| classify_file(path) == FileKind::Header)
+        .collect::<BTreeSet<_>>();
+    let translation_units = snapshot
+        .files
+        .iter()
+        .map(|file| file.path.as_str())
+        .filter(|path| classify_file(path) == FileKind::TranslationUnit)
+        .collect::<BTreeSet<_>>();
+    let mut reverse_edges = BTreeMap::<&str, BTreeSet<&str>>::new();
+
+    for edge in &snapshot.edges {
+        if let SnapshotTarget::Resolved { path } = &edge.to {
+            reverse_edges
+                .entry(path.as_str())
+                .or_default()
+                .insert(edge.from.as_str());
+        }
+    }
+
+    headers
+        .iter()
+        .map(|header| {
+            let mut seen = BTreeSet::from([*header]);
+            let mut queue = VecDeque::from([*header]);
+            let mut impacted_translation_units = BTreeSet::new();
+
+            while let Some(file) = queue.pop_front() {
+                for dependant in reverse_edges.get(file).into_iter().flatten() {
+                    let dependant = *dependant;
+
+                    if !seen.insert(dependant) {
+                        continue;
+                    }
+
+                    if translation_units.contains(dependant) {
+                        impacted_translation_units.insert(dependant);
+                    }
+
+                    queue.push_back(dependant);
+                }
+            }
+
+            ((*header).to_owned(), impacted_translation_units.len())
+        })
+        .collect()
 }
 
 fn resolved_edges_by_key(
@@ -524,6 +624,60 @@ fn write_missing_section(output: &mut String, heading: &str, changes: &[MissingI
     }
 }
 
+fn write_impact_delta_sections(output: &mut String, changes: &[ImpactDeltaChange]) {
+    let increases = changes
+        .iter()
+        .filter(|change| change.delta > 0)
+        .collect::<Vec<_>>();
+    let decreases = changes
+        .iter()
+        .filter(|change| change.delta < 0)
+        .collect::<Vec<_>>();
+
+    write_impact_delta_section(output, "Impact increases", increases, true);
+    write_impact_delta_section(output, "Impact decreases", decreases, false);
+}
+
+fn write_impact_delta_section(
+    output: &mut String,
+    heading: &str,
+    mut changes: Vec<&ImpactDeltaChange>,
+    largest_delta_first: bool,
+) {
+    changes.sort_by(|left, right| {
+        let delta_order = if largest_delta_first {
+            right.delta.cmp(&left.delta)
+        } else {
+            left.delta.cmp(&right.delta)
+        };
+
+        delta_order.then_with(|| left.header.cmp(&right.header))
+    });
+
+    let _ = writeln!(output, "\n{heading} ({}):", changes.len());
+
+    if changes.is_empty() {
+        output.push_str("  (none)\n");
+        return;
+    }
+
+    for change in changes.iter().take(DEFAULT_MAX_IMPACT_DELTA_CHANGES) {
+        let _ = writeln!(
+            output,
+            "  {}: {} -> {} ({:+} translation units)",
+            change.header, change.old_translation_units, change.new_translation_units, change.delta
+        );
+    }
+
+    if changes.len() > DEFAULT_MAX_IMPACT_DELTA_CHANGES {
+        let _ = writeln!(
+            output,
+            "  ... {} more not shown",
+            changes.len() - DEFAULT_MAX_IMPACT_DELTA_CHANGES
+        );
+    }
+}
+
 fn format_include(kind: IncludeKind, include: &str) -> String {
     match kind {
         IncludeKind::Quote => format!("\"{include}\""),
@@ -635,6 +789,52 @@ mod tests {
                 "      -> include/c.h\n",
             )
         );
+    }
+
+    #[test]
+    fn reports_translation_unit_impact_deltas_for_headers() {
+        let old = test_snapshot(vec![
+            resolved_edge("include/app.h", "include/config.h", "config.h", 1),
+            resolved_edge("src/main.cpp", "include/app.h", "app.h", 1),
+            resolved_edge("src/old.cpp", "include/legacy.h", "legacy.h", 1),
+            resolved_edge("src/stable.cpp", "include/stable.h", "stable.h", 1),
+            resolved_edge("src/worker.cc", "include/config.h", "config.h", 1),
+        ]);
+        let new = test_snapshot(vec![
+            resolved_edge("include/app.h", "include/config.h", "config.h", 1),
+            resolved_edge("src/main.cpp", "include/app.h", "app.h", 1),
+            resolved_edge("src/server.cxx", "include/config.h", "config.h", 1),
+            resolved_edge("src/stable.cpp", "include/stable.h", "stable.h", 1),
+            resolved_edge("src/worker.cc", "include/config.h", "config.h", 1),
+        ]);
+        let diff = diff_include_graph_snapshots(&old, &new).unwrap();
+
+        assert_eq!(
+            diff.impact_deltas,
+            vec![
+                ImpactDeltaChange {
+                    header: "include/config.h".to_owned(),
+                    old_translation_units: 2,
+                    new_translation_units: 3,
+                    delta: 1,
+                },
+                ImpactDeltaChange {
+                    header: "include/legacy.h".to_owned(),
+                    old_translation_units: 1,
+                    new_translation_units: 0,
+                    delta: -1,
+                },
+            ]
+        );
+
+        let rendered = render_snapshot_diff_with_impact(&diff);
+        assert!(rendered.contains(
+            "Impact increases (1):\n  include/config.h: 2 -> 3 (+1 translation units)\n"
+        ));
+        assert!(rendered.contains(
+            "Impact decreases (1):\n  include/legacy.h: 1 -> 0 (-1 translation units)\n"
+        ));
+        assert!(!rendered.contains("include/stable.h:"));
     }
 
     fn test_snapshot(edges: Vec<SnapshotEdge>) -> IncludeGraphSnapshot {

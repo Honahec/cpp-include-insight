@@ -5,8 +5,8 @@ use cpp_include_insight_core::{
     SnapshotOptions, WhyOptions, analyze_include_impact, build_include_graph_snapshot,
     detect_include_cycles, diff_include_graph_snapshots, find_include_paths, graph_to_json_value,
     load_include_graph_snapshot, render_impact_result, render_include_cycles, render_include_tree,
-    render_mermaid_graph, render_reverse_include_tree, render_snapshot_diff, render_why_result,
-    scan_project,
+    render_mermaid_graph, render_reverse_include_tree, render_snapshot_diff,
+    render_snapshot_diff_with_impact, render_why_result, scan_project,
 };
 use std::{
     fs,
@@ -157,6 +157,10 @@ enum Command {
         /// Exit with failure when the diff introduces a new include cycle.
         #[arg(long = "fail-on-new-cycle")]
         fail_on_new_cycle: bool,
+
+        /// Report translation-unit impact count deltas for changed headers.
+        #[arg(long = "impact")]
+        impact: bool,
     },
 }
 
@@ -454,6 +458,7 @@ fn main() -> Result<()> {
             inputs,
             include_dirs,
             fail_on_new_cycle,
+            impact,
         } => {
             let diff = match inputs.as_slice() {
                 [range] if is_git_revision_range(range) => {
@@ -470,7 +475,11 @@ fn main() -> Result<()> {
                 ),
             };
 
-            print!("{}", render_snapshot_diff(&diff));
+            if impact {
+                print!("{}", render_snapshot_diff_with_impact(&diff));
+            } else {
+                print!("{}", render_snapshot_diff(&diff));
+            }
 
             if fail_on_new_cycle && !diff.new_cycles.is_empty() {
                 bail!(
