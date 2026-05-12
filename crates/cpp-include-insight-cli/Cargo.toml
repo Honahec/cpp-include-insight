@@ -15,6 +15,6 @@ anyhow.workspace = true
 clap.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
-cpp-include-insight-core = { path = "../cpp-include-insight-core" }
+cpp-include-insight-core = { version = "0.4.1", path = "../cpp-include-insight-core" }
 
 [dev-dependencies]

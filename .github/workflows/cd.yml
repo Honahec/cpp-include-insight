@@ -1,0 +1,134 @@
+name: CD
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish, without the leading v"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: crates-publish
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish crates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy, rustfmt
+
+      - name: Install just
+        run: cargo install just --locked
+
+      - name: Resolve release version
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.version }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+            if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Release tag must look like vX.Y.Z, got: $tag" >&2
+              exit 1
+            fi
+            version="${tag#v}"
+          fi
+
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release version must look like X.Y.Z, got: $version" >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Validate Cargo versions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="${{ steps.release.outputs.version }}"
+          cli_version="$(sed -n 's/^version = "\(.*\)"/\1/p' crates/cpp-include-insight-cli/Cargo.toml | head -n1)"
+          core_version="$(sed -n 's/^version = "\(.*\)"/\1/p' crates/cpp-include-insight-core/Cargo.toml | head -n1)"
+          cli_core_dependency="$(sed -n 's/^cpp-include-insight-core = .*version = "\([^"]*\)".*/\1/p' crates/cpp-include-insight-cli/Cargo.toml | head -n1)"
+
+          if [[ "$cli_version" != "$version" ]]; then
+            echo "CLI version is $cli_version, expected $version" >&2
+            exit 1
+          fi
+
+          if [[ "$core_version" != "$version" ]]; then
+            echo "Core version is $core_version, expected $version" >&2
+            exit 1
+          fi
+
+          if [[ "$cli_core_dependency" != "$version" ]]; then
+            echo "CLI depends on cpp-include-insight-core $cli_core_dependency, expected $version" >&2
+            exit 1
+          fi
+
+      - name: Run checks
+        run: just check
+
+      - name: Publish crates
+        shell: bash
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          version="${{ steps.release.outputs.version }}"
+
+          crate_version_exists() {
+            local crate="$1"
+            curl -fsS "https://crates.io/api/v1/crates/${crate}/${version}" >/dev/null 2>&1
+          }
+
+          publish_if_needed() {
+            local package="$1"
+            local crate="$2"
+
+            if crate_version_exists "$crate"; then
+              echo "${crate} ${version} is already published; skipping."
+              return
+            fi
+
+            cargo publish -p "$package"
+          }
+
+          wait_for_crate_version() {
+            local crate="$1"
+
+            for _ in {1..30}; do
+              if crate_version_exists "$crate"; then
+                return
+              fi
+              sleep 10
+            done
+
+            echo "${crate} ${version} did not become visible on crates.io in time" >&2
+            exit 1
+          }
+
+          publish_if_needed "cpp-include-insight-core" "cpp-include-insight-core"
+          wait_for_crate_version "cpp-include-insight-core"
+          publish_if_needed "cpp-include-insight" "cpp-include-insight"
