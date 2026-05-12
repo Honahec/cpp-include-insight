@@ -1,5 +1,5 @@
 use crate::{IncludeCycle, IncludeGraph, IncludeKind, IncludeTarget};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     path::{Component, Path, PathBuf},
@@ -12,7 +12,7 @@ pub struct SnapshotOptions {
     pub absolute_paths: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IncludeGraphSnapshot {
     pub version: u32,
     pub root: SnapshotRoot,
@@ -22,20 +22,20 @@ pub struct IncludeGraphSnapshot {
     pub cycles: Vec<SnapshotCycle>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SnapshotRoot {
     pub path: String,
     pub path_style: SnapshotPathStyle,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SnapshotPathStyle {
     ProjectRelative,
     Absolute,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SnapshotStats {
     pub files: usize,
     pub edges: usize,
@@ -45,12 +45,12 @@ pub struct SnapshotStats {
     pub cycles: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SnapshotFile {
     pub path: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SnapshotEdge {
     pub from: String,
     pub to: SnapshotTarget,
@@ -59,7 +59,7 @@ pub struct SnapshotEdge {
     pub line: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SnapshotTarget {
     Resolved { path: String },
@@ -67,13 +67,13 @@ pub enum SnapshotTarget {
     Missing { include: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SnapshotCycle {
     pub files: Vec<String>,
     pub edges: Vec<SnapshotCycleEdge>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SnapshotCycleEdge {
     pub from: String,
     pub to: String,

@@ -657,3 +657,37 @@ fn snapshot_output_is_deterministic_and_includes_cycles() {
         ])
     );
 }
+
+#[test]
+fn diff_reports_snapshot_dependency_changes_in_stable_order() {
+    let fixture = fixture_path("snapshot-diff");
+    let old = fixture.join("old.json");
+    let new = fixture.join("new.json");
+    let stdout = run_cli(&["diff", old.to_str().unwrap(), new.to_str().unwrap()]);
+
+    assert_eq!(
+        stdout,
+        concat!(
+            "Snapshot diff summary:\n",
+            "Files: 3 -> 4 (+1)\n",
+            "Edges: 4 -> 5 (+1)\n",
+            "Resolved: 2 -> 3 (+1)\n",
+            "External: 1 -> 1 (+0)\n",
+            "Missing: 1 -> 1 (+0)\n",
+            "Cycles: 0 -> 0 (+0)\n",
+            "\n",
+            "Added resolved dependencies (2):\n",
+            "  src/main.cpp:3 -> include/generated.h (include \"generated.h\")\n",
+            "  src/main.cpp:4 -> include/new.h (include \"new.h\")\n",
+            "\n",
+            "Removed resolved dependencies (1):\n",
+            "  src/main.cpp:2 -> include/old.h (include \"old.h\")\n",
+            "\n",
+            "Newly missing includes (1):\n",
+            "  include/app.h:2 -> missing config.h (include \"config.h\")\n",
+            "\n",
+            "Newly resolved includes (1):\n",
+            "  src/main.cpp:3 -> include/generated.h (include \"generated.h\")\n",
+        )
+    );
+}
