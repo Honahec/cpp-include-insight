@@ -36,6 +36,25 @@ fn run_cli_in(args: &[&str], current_dir: Option<&Path>) -> String {
     String::from_utf8(output.stdout).expect("stdout should be valid UTF-8")
 }
 
+fn run_cli_failure(args: &[&str]) -> (String, String) {
+    let output = Command::new(env!("CARGO_BIN_EXE_cpp-include-insight"))
+        .args(args)
+        .output()
+        .expect("failed to run cpp-include-insight");
+
+    assert!(
+        !output.status.success(),
+        "command unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    (
+        String::from_utf8(output.stdout).expect("stdout should be valid UTF-8"),
+        String::from_utf8(output.stderr).expect("stderr should be valid UTF-8"),
+    )
+}
+
 #[test]
 fn graph_json_outputs_files_edges_missing_and_external_for_simple_fixture() {
     let fixture = fixture_path("simple");
@@ -688,8 +707,68 @@ fn diff_reports_snapshot_dependency_changes_in_stable_order() {
             "\n",
             "Newly resolved includes (1):\n",
             "  src/main.cpp:3 -> include/generated.h (include \"generated.h\")\n",
+            "\n",
+            "New include cycles (0):\n",
+            "  (none)\n",
         )
     );
+}
+
+#[test]
+fn diff_reports_new_cycles_without_repeating_unchanged_or_removed_cycles() {
+    let fixture = fixture_path("snapshot-cycle-diff");
+    let old = fixture.join("old.json");
+    let new = fixture.join("new.json");
+    let stdout = run_cli(&["diff", old.to_str().unwrap(), new.to_str().unwrap()]);
+
+    assert_eq!(
+        stdout,
+        concat!(
+            "Snapshot diff summary:\n",
+            "Files: 4 -> 4 (+0)\n",
+            "Edges: 4 -> 4 (+0)\n",
+            "Resolved: 4 -> 4 (+0)\n",
+            "External: 0 -> 0 (+0)\n",
+            "Missing: 0 -> 0 (+0)\n",
+            "Cycles: 2 -> 2 (+0)\n",
+            "\n",
+            "Added resolved dependencies (2):\n",
+            "  include/c.h:5 -> include/d.h (include \"d.h\")\n",
+            "  include/d.h:6 -> include/c.h (include \"c.h\")\n",
+            "\n",
+            "Removed resolved dependencies (2):\n",
+            "  include/removed.h:3 -> include/removed2.h (include \"removed2.h\")\n",
+            "  include/removed2.h:4 -> include/removed.h (include \"removed.h\")\n",
+            "\n",
+            "Newly missing includes (0):\n",
+            "  (none)\n",
+            "\n",
+            "Newly resolved includes (0):\n",
+            "  (none)\n",
+            "\n",
+            "New include cycles (1):\n",
+            "  Cycle 1:\n",
+            "    include/c.h:5\n",
+            "      -> include/d.h:6\n",
+            "      -> include/c.h\n",
+        )
+    );
+}
+
+#[test]
+fn diff_fail_on_new_cycle_exits_with_failure() {
+    let fixture = fixture_path("snapshot-cycle-diff");
+    let old = fixture.join("old.json");
+    let new = fixture.join("new.json");
+    let (stdout, stderr) = run_cli_failure(&[
+        "diff",
+        "--fail-on-new-cycle",
+        old.to_str().unwrap(),
+        new.to_str().unwrap(),
+    ]);
+
+    assert!(stdout.contains("New include cycles (1):"));
+    assert!(stderr.contains("include graph diff introduced 1 new cycle(s)"));
 }
 
 #[test]
@@ -741,6 +820,9 @@ fn diff_reports_git_revision_dependency_changes() {
             "  (none)\n",
             "\n",
             "Newly resolved includes (0):\n",
+            "  (none)\n",
+            "\n",
+            "New include cycles (0):\n",
             "  (none)\n",
         )
     );

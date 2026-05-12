@@ -60,11 +60,14 @@ Compare include graph changes between Git revisions:
 
 ```bash
 cargo run -p cpp-include-insight -- diff main...HEAD -I include
+cargo run -p cpp-include-insight -- diff main...HEAD -I include --fail-on-new-cycle
 ```
 
 `diff A...B` compares the merge-base of `A` and `B` against `B`. `diff A..B`
 compares `A` directly against `B`. Git revision diffs read committed content
-with `git archive`, so uncommitted worktree changes are not included.
+with `git archive`, so uncommitted worktree changes are not included. Use
+`--fail-on-new-cycle` to make CI fail when the diff introduces a new include
+cycle.
 
 ## Development
 

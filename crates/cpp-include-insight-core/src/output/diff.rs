@@ -1,6 +1,8 @@
 use crate::{
     IncludeGraphSnapshot, IncludeKind, SNAPSHOT_VERSION,
-    output::snapshot::{SnapshotEdge, SnapshotStats, SnapshotTarget},
+    output::snapshot::{
+        SnapshotCycle, SnapshotCycleEdge, SnapshotEdge, SnapshotStats, SnapshotTarget,
+    },
 };
 use anyhow::{Context, Result, bail};
 use std::{
@@ -18,6 +20,7 @@ pub struct SnapshotDiff {
     pub removed_resolved: Vec<ResolvedDependencyChange>,
     pub newly_missing: Vec<MissingIncludeChange>,
     pub newly_resolved: Vec<ResolvedDependencyChange>,
+    pub new_cycles: Vec<SnapshotCycleChange>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +40,12 @@ pub struct MissingIncludeChange {
     pub line: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotCycleChange {
+    pub files: Vec<String>,
+    pub edges: Vec<SnapshotCycleEdge>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ResolvedDependencyKey {
     from: String,
@@ -50,6 +59,11 @@ struct IncludeRequestKey {
     from: String,
     include: String,
     kind: IncludeKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct CycleKey {
+    files: Vec<String>,
 }
 
 pub fn load_include_graph_snapshot(path: impl AsRef<Path>) -> Result<IncludeGraphSnapshot> {
@@ -102,6 +116,24 @@ pub fn validate_include_graph_snapshot(snapshot: &IncludeGraphSnapshot, label: &
         }
     }
 
+    for cycle in &snapshot.cycles {
+        for file in &cycle.files {
+            if !file_paths.contains(file.as_str()) {
+                bail!("{label} has a cycle containing unknown file {}", file);
+            }
+        }
+
+        for edge in &cycle.edges {
+            if !file_paths.contains(edge.from.as_str()) {
+                bail!("{label} has a cycle edge from unknown file {}", edge.from);
+            }
+
+            if !file_paths.contains(edge.to.as_str()) {
+                bail!("{label} has a cycle edge to unknown file {}", edge.to);
+            }
+        }
+    }
+
     let resolved = snapshot
         .edges
         .iter()
@@ -150,6 +182,8 @@ pub fn diff_include_graph_snapshots(
     let old_missing = missing_edges_by_request(old);
     let new_missing = missing_edges_by_request(new);
     let new_resolved_by_request = resolved_edges_by_request(new);
+    let old_cycles = cycles_by_key(old);
+    let new_cycles_by_key = cycles_by_key(new);
 
     let added_resolved = new_resolved
         .iter()
@@ -171,6 +205,11 @@ pub fn diff_include_graph_snapshots(
         .filter_map(|key| new_resolved_by_request.get(key))
         .cloned()
         .collect();
+    let new_cycles = new_cycles_by_key
+        .iter()
+        .filter(|(key, _)| !old_cycles.contains_key(*key))
+        .map(|(_, cycle)| cycle.clone())
+        .collect();
 
     Ok(SnapshotDiff {
         old_stats: old.stats.clone(),
@@ -179,6 +218,7 @@ pub fn diff_include_graph_snapshots(
         removed_resolved,
         newly_missing,
         newly_resolved,
+        new_cycles,
     })
 }
 
@@ -235,6 +275,7 @@ pub fn render_snapshot_diff(diff: &SnapshotDiff) -> String {
     );
     write_missing_section(&mut output, "Newly missing includes", &diff.newly_missing);
     write_resolved_section(&mut output, "Newly resolved includes", &diff.newly_resolved);
+    write_cycle_section(&mut output, "New include cycles", &diff.new_cycles);
 
     output
 }
@@ -329,6 +370,29 @@ fn include_request_key(edge: &SnapshotEdge) -> IncludeRequestKey {
     }
 }
 
+fn cycles_by_key(snapshot: &IncludeGraphSnapshot) -> BTreeMap<CycleKey, SnapshotCycleChange> {
+    snapshot
+        .cycles
+        .iter()
+        .map(|cycle| {
+            (
+                cycle_key(cycle),
+                SnapshotCycleChange {
+                    files: cycle.files.clone(),
+                    edges: cycle.edges.clone(),
+                },
+            )
+        })
+        .collect()
+}
+
+fn cycle_key(cycle: &SnapshotCycle) -> CycleKey {
+    let mut files = cycle.files.clone();
+    files.sort();
+
+    CycleKey { files }
+}
+
 fn write_metric(output: &mut String, label: &str, old: usize, new: usize) {
     let delta = new as isize - old as isize;
     let sign = if delta >= 0 { "+" } else { "" };
@@ -358,6 +422,86 @@ fn write_resolved_section(
             format_include(change.kind, &change.include)
         );
     }
+}
+
+fn write_cycle_section(output: &mut String, heading: &str, cycles: &[SnapshotCycleChange]) {
+    let _ = writeln!(output, "\n{heading} ({}):", cycles.len());
+
+    if cycles.is_empty() {
+        output.push_str("  (none)\n");
+        return;
+    }
+
+    for (index, cycle) in cycles.iter().enumerate() {
+        let _ = writeln!(output, "  Cycle {}:", index + 1);
+        write_cycle_path(output, cycle);
+    }
+}
+
+fn write_cycle_path(output: &mut String, cycle: &SnapshotCycleChange) {
+    let Some(path) = find_cycle_path(cycle) else {
+        for edge in &cycle.edges {
+            let _ = writeln!(output, "    {}:{} -> {}", edge.from, edge.line, edge.to);
+        }
+        return;
+    };
+
+    for (index, edge) in path.iter().enumerate() {
+        if index == 0 {
+            let _ = writeln!(output, "    {}:{}", edge.from, edge.line);
+        }
+
+        output.push_str("      -> ");
+        output.push_str(&edge.to);
+
+        if let Some(next_edge) = path.get(index + 1) {
+            let _ = write!(output, ":{}", next_edge.line);
+        }
+
+        output.push('\n');
+    }
+}
+
+fn find_cycle_path(cycle: &SnapshotCycleChange) -> Option<Vec<&SnapshotCycleEdge>> {
+    let start = cycle.files.first()?;
+    let mut stack = BTreeSet::from([start.as_str()]);
+    let mut path = Vec::new();
+
+    if find_cycle_path_from(cycle, start, start, &mut stack, &mut path) {
+        Some(path)
+    } else {
+        None
+    }
+}
+
+fn find_cycle_path_from<'a>(
+    cycle: &'a SnapshotCycleChange,
+    start: &str,
+    current: &str,
+    stack: &mut BTreeSet<&'a str>,
+    path: &mut Vec<&'a SnapshotCycleEdge>,
+) -> bool {
+    for edge in cycle.edges.iter().filter(|edge| edge.from == current) {
+        path.push(edge);
+
+        if edge.to == start {
+            return true;
+        }
+
+        if !stack.contains(edge.to.as_str()) {
+            stack.insert(edge.to.as_str());
+
+            if find_cycle_path_from(cycle, start, &edge.to, stack, path) {
+                return true;
+            }
+
+            stack.remove(edge.to.as_str());
+        }
+
+        path.pop();
+    }
+
+    false
 }
 
 fn write_missing_section(output: &mut String, heading: &str, changes: &[MissingIncludeChange]) {
@@ -411,11 +555,96 @@ mod tests {
         assert_eq!(diff.removed_resolved.len(), 1);
         assert_eq!(diff.newly_missing.len(), 1);
         assert_eq!(diff.newly_resolved.len(), 1);
+        assert_eq!(diff.new_cycles.len(), 0);
         assert_eq!(diff.added_resolved[0].to, "include/generated.h");
         assert_eq!(diff.added_resolved[1].to, "include/new.h");
     }
 
+    #[test]
+    fn reports_only_cycles_absent_from_old_snapshot() {
+        let old = test_snapshot_with_cycles(
+            vec![
+                resolved_edge("include/a.h", "include/b.h", "b.h", 1),
+                resolved_edge("include/b.h", "include/a.h", "a.h", 2),
+                resolved_edge("include/removed.h", "include/removed2.h", "removed2.h", 3),
+                resolved_edge("include/removed2.h", "include/removed.h", "removed.h", 4),
+            ],
+            vec![
+                cycle(vec![
+                    cycle_edge("include/a.h", "include/b.h", "b.h", 1),
+                    cycle_edge("include/b.h", "include/a.h", "a.h", 2),
+                ]),
+                cycle(vec![
+                    cycle_edge("include/removed.h", "include/removed2.h", "removed2.h", 3),
+                    cycle_edge("include/removed2.h", "include/removed.h", "removed.h", 4),
+                ]),
+            ],
+        );
+        let new = test_snapshot_with_cycles(
+            vec![
+                resolved_edge("include/a.h", "include/b.h", "b.h", 10),
+                resolved_edge("include/b.h", "include/a.h", "a.h", 11),
+                resolved_edge("include/c.h", "include/d.h", "d.h", 5),
+                resolved_edge("include/d.h", "include/c.h", "c.h", 6),
+            ],
+            vec![
+                cycle(vec![
+                    cycle_edge("include/a.h", "include/b.h", "b.h", 10),
+                    cycle_edge("include/b.h", "include/a.h", "a.h", 11),
+                ]),
+                cycle(vec![
+                    cycle_edge("include/c.h", "include/d.h", "d.h", 5),
+                    cycle_edge("include/d.h", "include/c.h", "c.h", 6),
+                ]),
+            ],
+        );
+
+        let diff = diff_include_graph_snapshots(&old, &new).unwrap();
+
+        assert_eq!(diff.new_cycles.len(), 1);
+        assert_eq!(diff.new_cycles[0].files, vec!["include/c.h", "include/d.h"]);
+        assert_eq!(
+            render_snapshot_diff(&diff),
+            concat!(
+                "Snapshot diff summary:\n",
+                "Files: 4 -> 4 (+0)\n",
+                "Edges: 4 -> 4 (+0)\n",
+                "Resolved: 4 -> 4 (+0)\n",
+                "External: 0 -> 0 (+0)\n",
+                "Missing: 0 -> 0 (+0)\n",
+                "Cycles: 2 -> 2 (+0)\n",
+                "\n",
+                "Added resolved dependencies (2):\n",
+                "  include/c.h:5 -> include/d.h (include \"d.h\")\n",
+                "  include/d.h:6 -> include/c.h (include \"c.h\")\n",
+                "\n",
+                "Removed resolved dependencies (2):\n",
+                "  include/removed.h:3 -> include/removed2.h (include \"removed2.h\")\n",
+                "  include/removed2.h:4 -> include/removed.h (include \"removed.h\")\n",
+                "\n",
+                "Newly missing includes (0):\n",
+                "  (none)\n",
+                "\n",
+                "Newly resolved includes (0):\n",
+                "  (none)\n",
+                "\n",
+                "New include cycles (1):\n",
+                "  Cycle 1:\n",
+                "    include/c.h:5\n",
+                "      -> include/d.h:6\n",
+                "      -> include/c.h\n",
+            )
+        );
+    }
+
     fn test_snapshot(edges: Vec<SnapshotEdge>) -> IncludeGraphSnapshot {
+        test_snapshot_with_cycles(edges, vec![])
+    }
+
+    fn test_snapshot_with_cycles(
+        edges: Vec<SnapshotEdge>,
+        cycles: Vec<SnapshotCycle>,
+    ) -> IncludeGraphSnapshot {
         let mut files = edges
             .iter()
             .flat_map(|edge| {
@@ -441,6 +670,7 @@ mod tests {
             .iter()
             .filter(|edge| matches!(edge.to, SnapshotTarget::Missing { .. }))
             .count();
+        let cycle_count = cycles.len();
 
         IncludeGraphSnapshot {
             version: SNAPSHOT_VERSION,
@@ -454,14 +684,14 @@ mod tests {
                 resolved,
                 external,
                 missing,
-                cycles: 0,
+                cycles: cycle_count,
             },
             files: files
                 .into_iter()
                 .map(|path| SnapshotFile { path })
                 .collect(),
             edges,
-            cycles: vec![],
+            cycles,
         }
     }
 
@@ -485,6 +715,26 @@ mod tests {
             },
             include: include.to_owned(),
             kind: IncludeKind::Quote,
+            line,
+        }
+    }
+
+    fn cycle(edges: Vec<SnapshotCycleEdge>) -> SnapshotCycle {
+        let mut files = edges
+            .iter()
+            .flat_map(|edge| [edge.from.clone(), edge.to.clone()])
+            .collect::<Vec<_>>();
+        files.sort();
+        files.dedup();
+
+        SnapshotCycle { files, edges }
+    }
+
+    fn cycle_edge(from: &str, to: &str, include: &str, line: usize) -> SnapshotCycleEdge {
+        SnapshotCycleEdge {
+            from: from.to_owned(),
+            to: to.to_owned(),
+            include: include.to_owned(),
             line,
         }
     }

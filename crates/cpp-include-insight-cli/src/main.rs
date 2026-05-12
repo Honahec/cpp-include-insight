@@ -153,6 +153,10 @@ enum Command {
         /// Include directories used when diffing Git revisions.
         #[arg(short = 'I', long = "include-dir")]
         include_dirs: Vec<PathBuf>,
+
+        /// Exit with failure when the diff introduces a new include cycle.
+        #[arg(long = "fail-on-new-cycle")]
+        fail_on_new_cycle: bool,
     },
 }
 
@@ -449,6 +453,7 @@ fn main() -> Result<()> {
         Command::Diff {
             inputs,
             include_dirs,
+            fail_on_new_cycle,
         } => {
             let diff = match inputs.as_slice() {
                 [range] if is_git_revision_range(range) => {
@@ -466,6 +471,13 @@ fn main() -> Result<()> {
             };
 
             print!("{}", render_snapshot_diff(&diff));
+
+            if fail_on_new_cycle && !diff.new_cycles.is_empty() {
+                bail!(
+                    "include graph diff introduced {} new cycle(s)",
+                    diff.new_cycles.len()
+                );
+            }
         }
     }
 
