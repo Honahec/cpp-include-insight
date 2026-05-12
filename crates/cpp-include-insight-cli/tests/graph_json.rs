@@ -1148,7 +1148,16 @@ fn github_action_metadata_supports_pull_request_report_inputs() {
     assert!(action.contains("report-path:"));
     assert!(action.contains("cargo build --locked --release"));
     assert!(action.contains("report --base"));
-    assert!(action.contains("gh pr comment"));
+    assert!(action.contains("scripts/comment-pr-report.sh"));
+
+    let script_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/comment-pr-report.sh");
+    let script = fs::read_to_string(script_path).unwrap();
+
+    assert!(script.contains("<!-- cpp-include-insight-report -->"));
+    assert!(script.contains("gh api \"repos/$repository/issues/$pr_number/comments\""));
+    assert!(script.contains("--method PATCH"));
+    assert!(script.contains("gh pr comment"));
 }
 
 #[test]

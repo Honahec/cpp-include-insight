@@ -108,23 +108,7 @@ runs:
       run: |
         set -euo pipefail
 
-        marker="<!-- cpp-include-insight-report -->"
-        body_file="$RUNNER_TEMP/cpp-include-insight-comment.md"
-        {
-          echo "$marker"
-          cat "${{ inputs.report-path }}"
-        } > "$body_file"
-
-        pr_number="${{ github.event.pull_request.number }}"
-        repository="${{ github.repository }}"
-        comment_id="$(
-          gh api "repos/$repository/issues/$pr_number/comments" \
-            --jq ".[] | select(.user.type == \"Bot\" and (.body | contains(\"$marker\"))) | .id" \
-            | head -n 1
-        )"
-
-        if [[ -n "$comment_id" ]]; then
-          gh api --method PATCH "repos/$repository/issues/comments/$comment_id" --field body=@"$body_file" >/dev/null
-        else
-          gh pr comment "$pr_number" --repo "$repository" --body-file "$body_file"
-        fi
+        bash "$GITHUB_ACTION_PATH/scripts/comment-pr-report.sh" \
+          "${{ steps.report.outputs.report-path }}" \
+          "${{ github.event.pull_request.number }}" \
+          "${{ github.repository }}"
