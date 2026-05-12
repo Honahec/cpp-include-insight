@@ -1148,6 +1148,8 @@ fn github_action_metadata_supports_pull_request_report_inputs() {
     assert!(action.contains("report-path:"));
     assert!(action.contains("cargo build --locked --release"));
     assert!(action.contains("report --base"));
+    assert!(action.contains("CPP_INCLUDE_INSIGHT_INCLUDE_DIRS"));
+    assert!(action.contains("mkdir -p \"$report_parent\""));
     assert!(action.contains("scripts/comment-pr-report.sh"));
 
     let script_path =

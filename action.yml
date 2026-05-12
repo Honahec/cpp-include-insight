@@ -51,18 +51,33 @@ runs:
     - name: Generate include graph report
       id: report
       shell: bash
+      env:
+        CPP_INCLUDE_INSIGHT_BASE: ${{ inputs.base }}
+        CPP_INCLUDE_INSIGHT_INCLUDE_DIRS: ${{ inputs.include-dirs }}
+        CPP_INCLUDE_INSIGHT_REPORT_PATH: ${{ inputs.report-path }}
       run: |
         set -euo pipefail
 
         cli="$GITHUB_ACTION_PATH/target/release/cpp-include-insight"
-        report_path="${{ inputs.report-path }}"
+        report_path="$CPP_INCLUDE_INSIGHT_REPORT_PATH"
         include_args=()
 
-        for include_dir in ${{ inputs.include-dirs }}; do
+        if [[ -z "$report_path" ]]; then
+          echo "report-path input must not be empty." >&2
+          exit 1
+        fi
+
+        read -r -a include_dirs <<< "$CPP_INCLUDE_INSIGHT_INCLUDE_DIRS"
+        for include_dir in "${include_dirs[@]}"; do
           include_args+=("-I" "$include_dir")
         done
 
-        "$cli" report --base "${{ inputs.base }}" --format markdown "${include_args[@]}" > "$report_path"
+        report_parent="$(dirname -- "$report_path")"
+        if [[ "$report_parent" != "." ]]; then
+          mkdir -p "$report_parent"
+        fi
+
+        "$cli" report --base "$CPP_INCLUDE_INSIGHT_BASE" --format markdown "${include_args[@]}" > "$report_path"
 
         {
           echo "report-path=$report_path"
@@ -75,21 +90,27 @@ runs:
 
     - name: Run include graph CI checks
       shell: bash
+      env:
+        CPP_INCLUDE_INSIGHT_BASE: ${{ inputs.base }}
+        CPP_INCLUDE_INSIGHT_CONFIG: ${{ inputs.config }}
+        CPP_INCLUDE_INSIGHT_FAIL_ON_NEW_CYCLE: ${{ inputs.fail-on-new-cycle }}
+        CPP_INCLUDE_INSIGHT_INCLUDE_DIRS: ${{ inputs.include-dirs }}
       run: |
         set -euo pipefail
 
         cli="$GITHUB_ACTION_PATH/target/release/cpp-include-insight"
         include_args=()
 
-        for include_dir in ${{ inputs.include-dirs }}; do
+        read -r -a include_dirs <<< "$CPP_INCLUDE_INSIGHT_INCLUDE_DIRS"
+        for include_dir in "${include_dirs[@]}"; do
           include_args+=("-I" "$include_dir")
         done
 
-        ci_args=(ci --base "${{ inputs.base }}")
+        ci_args=(ci --base "$CPP_INCLUDE_INSIGHT_BASE")
 
-        if [[ -n "${{ inputs.config }}" ]]; then
-          ci_args+=(--config "${{ inputs.config }}")
-        elif [[ "${{ inputs.fail-on-new-cycle }}" == "true" ]]; then
+        if [[ -n "$CPP_INCLUDE_INSIGHT_CONFIG" ]]; then
+          ci_args+=(--config "$CPP_INCLUDE_INSIGHT_CONFIG")
+        elif [[ "$CPP_INCLUDE_INSIGHT_FAIL_ON_NEW_CYCLE" == "true" ]]; then
           generated_config="$RUNNER_TEMP/cpp-include-insight-action.json"
           printf '{"ci":{"fail_on_new_cycle":true}}\n' > "$generated_config"
           ci_args+=(--config "$generated_config")
