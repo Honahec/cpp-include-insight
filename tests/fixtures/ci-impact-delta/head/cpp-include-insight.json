@@ -1,0 +1,6 @@
+{
+  "include_dirs": ["include"],
+  "ci": {
+    "max_impact_delta": 0
+  }
+}

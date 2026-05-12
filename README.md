@@ -61,6 +61,7 @@ Compare include graph changes between Git revisions:
 ```bash
 cargo run -p cpp-include-insight -- diff main...HEAD -I include
 cargo run -p cpp-include-insight -- diff main...HEAD -I include --fail-on-new-cycle
+cargo run -p cpp-include-insight -- ci --base main
 ```
 
 `diff A...B` compares the merge-base of `A` and `B` against `B`. `diff A..B`
@@ -68,6 +69,78 @@ compares `A` directly against `B`. Git revision diffs read committed content
 with `git archive`, so uncommitted worktree changes are not included. Use
 `--fail-on-new-cycle` to make CI fail when the diff introduces a new include
 cycle.
+
+The `ci` command reads `cpp-include-insight.json`,
+`.cpp-include-insight.json`, or `.cpp-include-insight/ci.json` from the Git
+root, and can also load an explicit path with `--config`:
+
+```json
+{
+  "include_dirs": ["include"],
+  "ci": {
+    "fail_on_new_cycle": true,
+    "fail_on_missing_include": true,
+    "max_impact_delta": 3,
+    "max_new_edges": 10,
+    "banned_includes": [
+      {
+        "from": "include/public/**",
+        "to": "src/private/**",
+        "reason": "public headers must not include private headers"
+      }
+    ]
+  }
+}
+```
+
+## GitHub Action
+
+Run include graph checks on pull requests with the bundled GitHub Action. The
+checkout step must use `fetch-depth: 0` so Git revision diffs can find the base
+ref and merge base. A complete workflow is available at
+`examples/.github/workflows/include-insight.yml`; copy it into your repository's
+`.github/workflows/` directory when you want to enable the action.
+
+```yaml
+name: Include Insight
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  include-insight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: Honahec/cpp-include-insight@v1
+        with:
+          base: origin/main
+          fail-on-new-cycle: true
+          comment: true
+```
+
+Inputs:
+
+| Input | Default | Description |
+| --- | --- | --- |
+| `base` | `origin/main` | Base Git revision or ref compared against `HEAD`. |
+| `include-dirs` | empty | Whitespace-separated include directories passed as `-I`. |
+| `config` | empty | Optional `cpp-include-insight.json` path for CI threshold rules. |
+| `fail-on-new-cycle` | `false` | Fail when the PR introduces a new project include cycle. |
+| `comment` | `false` | Post or update a pull request comment with the Markdown report. |
+| `report-path` | `cpp-include-insight-report.md` | Markdown report output path. |
+| `github-token` | `${{ github.token }}` | Token used for PR comments. |
+
+The action always writes a Markdown report and exposes it through the
+`report-path` and `report` outputs. Add `pull-requests: write` only when
+`comment: true`; otherwise `contents: read` is enough.
 
 ## Development
 

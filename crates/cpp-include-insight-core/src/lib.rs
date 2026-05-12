@@ -14,6 +14,10 @@ pub use analysis::why::{
     render_why_result,
 };
 pub use graph::{FileId, FileNode, IncludeEdge, IncludeGraph, IncludeGraphStats, IncludeTarget};
+pub use output::ci::{
+    BannedIncludeRule, CiCheckReport, CiRules, CiViolation, ProjectConfig, evaluate_ci_rules,
+    render_ci_check_report,
+};
 pub use output::diff::{
     ImpactDeltaChange, MissingIncludeChange, ResolvedDependencyChange, SnapshotCycleChange,
     SnapshotDiff, diff_include_graph_snapshots, load_include_graph_snapshot,

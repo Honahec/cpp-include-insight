@@ -1,0 +1,9 @@
+{
+  "include_dirs": ["include"],
+  "ci": {
+    "fail_on_new_cycle": true,
+    "fail_on_missing_include": true,
+    "max_impact_delta": 1,
+    "max_new_edges": 1
+  }
+}

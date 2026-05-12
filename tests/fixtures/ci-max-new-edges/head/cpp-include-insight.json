@@ -1,0 +1,6 @@
+{
+  "include_dirs": ["include"],
+  "ci": {
+    "max_new_edges": 1
+  }
+}

@@ -1,3 +1,4 @@
+pub mod ci;
 pub mod diff;
 pub mod json;
 pub mod mermaid;
