@@ -14,6 +14,7 @@ use std::{
 };
 
 const DEFAULT_MAX_IMPACT_DELTA_CHANGES: usize = 20;
+const DEFAULT_MAX_REPORT_CHANGES: usize = 20;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotDiff {
@@ -299,6 +300,48 @@ pub fn render_snapshot_diff_with_impact(diff: &SnapshotDiff) -> String {
     output
 }
 
+pub fn render_markdown_report(diff: &SnapshotDiff) -> String {
+    let mut output = String::new();
+
+    output.push_str("# Include Graph Report\n\n");
+    output.push_str("## Summary\n\n");
+    output.push_str("| Metric | Base | Head | Delta |\n");
+    output.push_str("| --- | ---: | ---: | ---: |\n");
+    write_markdown_metric(
+        &mut output,
+        "Files",
+        diff.old_stats.files,
+        diff.new_stats.files,
+    );
+    write_markdown_metric(
+        &mut output,
+        "Include edges",
+        diff.old_stats.edges,
+        diff.new_stats.edges,
+    );
+    write_markdown_metric(
+        &mut output,
+        "Missing includes",
+        diff.old_stats.missing,
+        diff.new_stats.missing,
+    );
+    write_markdown_metric(
+        &mut output,
+        "Cycles",
+        diff.old_stats.cycles,
+        diff.new_stats.cycles,
+    );
+
+    write_markdown_resolved_section(&mut output, "New include edges", &diff.added_resolved);
+    write_markdown_resolved_section(&mut output, "Removed include edges", &diff.removed_resolved);
+    write_markdown_missing_section(&mut output, "Newly missing includes", &diff.newly_missing);
+    write_markdown_resolved_section(&mut output, "Newly resolved includes", &diff.newly_resolved);
+    write_markdown_cycle_section(&mut output, "New cycles", &diff.new_cycles);
+    write_markdown_impact_delta_sections(&mut output, &diff.impact_deltas);
+
+    output
+}
+
 fn impact_delta_changes(
     old: &IncludeGraphSnapshot,
     new: &IncludeGraphSnapshot,
@@ -500,6 +543,13 @@ fn write_metric(output: &mut String, label: &str, old: usize, new: usize) {
     let _ = writeln!(output, "{label}: {old} -> {new} ({sign}{delta})");
 }
 
+fn write_markdown_metric(output: &mut String, label: &str, old: usize, new: usize) {
+    let delta = new as isize - old as isize;
+    let sign = if delta >= 0 { "+" } else { "" };
+
+    let _ = writeln!(output, "| {label} | {old} | {new} | {sign}{delta} |");
+}
+
 fn write_resolved_section(
     output: &mut String,
     heading: &str,
@@ -524,6 +574,31 @@ fn write_resolved_section(
     }
 }
 
+fn write_markdown_resolved_section(
+    output: &mut String,
+    heading: &str,
+    changes: &[ResolvedDependencyChange],
+) {
+    write_markdown_section_heading(output, heading, changes.len());
+
+    if changes.is_empty() {
+        output.push_str("No changes.\n");
+        return;
+    }
+
+    for change in changes.iter().take(DEFAULT_MAX_REPORT_CHANGES) {
+        let _ = writeln!(
+            output,
+            "- `{}` -> `{}` via `{}`",
+            line_location(&change.from, change.line),
+            change.to,
+            format_include(change.kind, &change.include)
+        );
+    }
+
+    write_markdown_truncation(output, changes.len());
+}
+
 fn write_cycle_section(output: &mut String, heading: &str, cycles: &[SnapshotCycleChange]) {
     let _ = writeln!(output, "\n{heading} ({}):", cycles.len());
 
@@ -536,6 +611,49 @@ fn write_cycle_section(output: &mut String, heading: &str, cycles: &[SnapshotCyc
         let _ = writeln!(output, "  Cycle {}:", index + 1);
         write_cycle_path(output, cycle);
     }
+}
+
+fn write_markdown_cycle_section(
+    output: &mut String,
+    heading: &str,
+    cycles: &[SnapshotCycleChange],
+) {
+    write_markdown_section_heading(output, heading, cycles.len());
+
+    if cycles.is_empty() {
+        output.push_str("No changes.\n");
+        return;
+    }
+
+    for cycle in cycles.iter().take(DEFAULT_MAX_REPORT_CHANGES) {
+        if let Some(path) = find_cycle_path(cycle) {
+            let mut parts = Vec::new();
+
+            for (index, edge) in path.iter().enumerate() {
+                if index == 0 {
+                    parts.push(line_location(&edge.from, edge.line));
+                }
+
+                let target = path
+                    .get(index + 1)
+                    .map(|next_edge| line_location(&edge.to, next_edge.line))
+                    .unwrap_or_else(|| edge.to.clone());
+                parts.push(target);
+            }
+
+            let _ = writeln!(output, "- `{}`", parts.join(" -> "));
+        } else {
+            let files = cycle
+                .files
+                .iter()
+                .map(|file| format!("`{file}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(output, "- {files}");
+        }
+    }
+
+    write_markdown_truncation(output, cycles.len());
 }
 
 fn write_cycle_path(output: &mut String, cycle: &SnapshotCycleChange) {
@@ -604,6 +722,30 @@ fn find_cycle_path_from<'a>(
     false
 }
 
+fn write_markdown_missing_section(
+    output: &mut String,
+    heading: &str,
+    changes: &[MissingIncludeChange],
+) {
+    write_markdown_section_heading(output, heading, changes.len());
+
+    if changes.is_empty() {
+        output.push_str("No changes.\n");
+        return;
+    }
+
+    for change in changes.iter().take(DEFAULT_MAX_REPORT_CHANGES) {
+        let _ = writeln!(
+            output,
+            "- `{}` now misses `{}`",
+            line_location(&change.from, change.line),
+            format_include(change.kind, &change.include)
+        );
+    }
+
+    write_markdown_truncation(output, changes.len());
+}
+
 fn write_missing_section(output: &mut String, heading: &str, changes: &[MissingIncludeChange]) {
     let _ = writeln!(output, "\n{heading} ({}):", changes.len());
 
@@ -636,6 +778,20 @@ fn write_impact_delta_sections(output: &mut String, changes: &[ImpactDeltaChange
 
     write_impact_delta_section(output, "Impact increases", increases, true);
     write_impact_delta_section(output, "Impact decreases", decreases, false);
+}
+
+fn write_markdown_impact_delta_sections(output: &mut String, changes: &[ImpactDeltaChange]) {
+    let increases = changes
+        .iter()
+        .filter(|change| change.delta > 0)
+        .collect::<Vec<_>>();
+    let decreases = changes
+        .iter()
+        .filter(|change| change.delta < 0)
+        .collect::<Vec<_>>();
+
+    write_markdown_impact_delta_section(output, "Impact increases", increases, true);
+    write_markdown_impact_delta_section(output, "Impact decreases", decreases, false);
 }
 
 fn write_impact_delta_section(
@@ -676,6 +832,58 @@ fn write_impact_delta_section(
             changes.len() - DEFAULT_MAX_IMPACT_DELTA_CHANGES
         );
     }
+}
+
+fn write_markdown_impact_delta_section(
+    output: &mut String,
+    heading: &str,
+    mut changes: Vec<&ImpactDeltaChange>,
+    largest_delta_first: bool,
+) {
+    changes.sort_by(|left, right| {
+        let delta_order = if largest_delta_first {
+            right.delta.cmp(&left.delta)
+        } else {
+            left.delta.cmp(&right.delta)
+        };
+
+        delta_order.then_with(|| left.header.cmp(&right.header))
+    });
+
+    write_markdown_section_heading(output, heading, changes.len());
+
+    if changes.is_empty() {
+        output.push_str("No changes.\n");
+        return;
+    }
+
+    for change in changes.iter().take(DEFAULT_MAX_REPORT_CHANGES) {
+        let _ = writeln!(
+            output,
+            "- `{}`: {} -> {} ({:+} translation units)",
+            change.header, change.old_translation_units, change.new_translation_units, change.delta
+        );
+    }
+
+    write_markdown_truncation(output, changes.len());
+}
+
+fn write_markdown_section_heading(output: &mut String, heading: &str, count: usize) {
+    let _ = writeln!(output, "\n## {heading} ({count})\n");
+}
+
+fn write_markdown_truncation(output: &mut String, total_count: usize) {
+    if total_count > DEFAULT_MAX_REPORT_CHANGES {
+        let _ = writeln!(
+            output,
+            "\n_{} more not shown._",
+            total_count - DEFAULT_MAX_REPORT_CHANGES
+        );
+    }
+}
+
+fn line_location(path: &str, line: usize) -> String {
+    format!("{path}:{line}")
 }
 
 fn format_include(kind: IncludeKind, include: &str) -> String {
