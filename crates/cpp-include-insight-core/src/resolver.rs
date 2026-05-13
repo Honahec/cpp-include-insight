@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
 };
 
@@ -10,11 +10,11 @@ use crate::{FileSearchPaths, IncludeDirective, IncludeKind};
 pub struct IncludeResolver {
     root: PathBuf,
     include_dirs: Vec<PathBuf>,
-    file_search_paths: HashMap<PathBuf, FileSearchPaths>,
+    file_search_paths: HashMap<PathBuf, Vec<FileSearchPaths>>,
     resolve_angle_in_search_paths: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IncludeResolution {
     Resolved(PathBuf),
@@ -48,7 +48,7 @@ impl IncludeResolver {
     pub fn with_file_search_paths(
         root: impl Into<PathBuf>,
         include_dirs: Vec<PathBuf>,
-        file_search_paths: HashMap<PathBuf, FileSearchPaths>,
+        file_search_paths: HashMap<PathBuf, Vec<FileSearchPaths>>,
     ) -> Self {
         let mut resolver = Self::new(root, include_dirs);
         resolver.file_search_paths = file_search_paths
@@ -64,11 +64,22 @@ impl IncludeResolver {
         including_file: impl AsRef<Path>,
         include: &IncludeDirective,
     ) -> IncludeResolution {
+        self.resolve_includes(including_file, include)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| IncludeResolution::Missing(include.path.clone()))
+    }
+
+    pub fn resolve_includes(
+        &self,
+        including_file: impl AsRef<Path>,
+        include: &IncludeDirective,
+    ) -> Vec<IncludeResolution> {
         match include.kind {
             IncludeKind::Angle if self.resolve_angle_in_search_paths => {
                 self.resolve_angle_include(including_file.as_ref(), include)
             }
-            IncludeKind::Angle => IncludeResolution::External(include.path.clone()),
+            IncludeKind::Angle => vec![IncludeResolution::External(include.path.clone())],
             IncludeKind::Quote => self.resolve_quote_include(including_file.as_ref(), include),
         }
     }
@@ -77,56 +88,68 @@ impl IncludeResolver {
         &self,
         including_file: &Path,
         include: &IncludeDirective,
-    ) -> IncludeResolution {
+    ) -> Vec<IncludeResolution> {
         let include_path = Path::new(&include.path);
 
         if let Some(parent) = including_file.parent() {
             let candidate = parent.join(include_path);
 
             if candidate.is_file() {
-                return IncludeResolution::Resolved(candidate);
+                return vec![IncludeResolution::Resolved(candidate)];
             }
         }
 
-        let search_paths = self.search_paths_for(including_file);
+        let resolutions = self
+            .search_path_contexts_for(including_file)
+            .into_iter()
+            .map(|search_paths| {
+                for include_dir in search_paths
+                    .quote_dirs
+                    .iter()
+                    .chain(search_paths.include_dirs.iter())
+                    .chain(search_paths.system_dirs.iter())
+                {
+                    let candidate = include_dir.join(include_path);
 
-        for include_dir in search_paths
-            .quote_dirs
-            .iter()
-            .chain(search_paths.include_dirs.iter())
-            .chain(search_paths.system_dirs.iter())
-        {
-            let candidate = include_dir.join(include_path);
+                    if candidate.is_file() {
+                        return self.resolve_candidate_or_external(candidate, include);
+                    }
+                }
 
-            if candidate.is_file() {
-                return self.resolve_candidate_or_external(candidate, include);
-            }
-        }
+                IncludeResolution::Missing(include.path.clone())
+            })
+            .collect::<Vec<_>>();
 
-        IncludeResolution::Missing(include.path.clone())
+        dedupe_resolutions(resolutions)
     }
 
     fn resolve_angle_include(
         &self,
         including_file: &Path,
         include: &IncludeDirective,
-    ) -> IncludeResolution {
+    ) -> Vec<IncludeResolution> {
         let include_path = Path::new(&include.path);
-        let search_paths = self.search_paths_for(including_file);
+        let resolutions = self
+            .search_path_contexts_for(including_file)
+            .into_iter()
+            .map(|search_paths| {
+                for include_dir in search_paths
+                    .include_dirs
+                    .iter()
+                    .chain(search_paths.system_dirs.iter())
+                {
+                    let candidate = include_dir.join(include_path);
 
-        for include_dir in search_paths
-            .include_dirs
-            .iter()
-            .chain(search_paths.system_dirs.iter())
-        {
-            let candidate = include_dir.join(include_path);
+                    if candidate.is_file() {
+                        return self.resolve_candidate_or_external(candidate, include);
+                    }
+                }
 
-            if candidate.is_file() {
-                return self.resolve_candidate_or_external(candidate, include);
-            }
-        }
+                IncludeResolution::External(include.path.clone())
+            })
+            .collect::<Vec<_>>();
 
-        IncludeResolution::External(include.path.clone())
+        dedupe_resolutions(resolutions)
     }
 
     fn resolve_candidate_or_external(
@@ -143,14 +166,22 @@ impl IncludeResolver {
         }
     }
 
-    fn search_paths_for(&self, including_file: &Path) -> FileSearchPaths {
-        let mut search_paths = self
+    fn search_path_contexts_for(&self, including_file: &Path) -> Vec<FileSearchPaths> {
+        let mut contexts = self
             .file_search_paths
             .get(&normalize_path(including_file))
             .cloned()
-            .unwrap_or_default();
-        search_paths.extend_include_dirs(self.include_dirs.clone());
-        search_paths
+            .unwrap_or_else(|| vec![FileSearchPaths::default()]);
+
+        if contexts.is_empty() {
+            contexts.push(FileSearchPaths::default());
+        }
+
+        for search_paths in &mut contexts {
+            search_paths.extend_include_dirs(self.include_dirs.clone());
+        }
+
+        contexts
     }
 
     pub fn root(&self) -> &Path {
@@ -170,6 +201,19 @@ fn is_under_root(path: &Path, root: &Path) -> bool {
     let path = normalize_path(path);
     let root = normalize_path(root);
     path.starts_with(root)
+}
+
+fn dedupe_resolutions(resolutions: Vec<IncludeResolution>) -> Vec<IncludeResolution> {
+    let mut seen = HashSet::new();
+    let mut deduped = Vec::new();
+
+    for resolution in resolutions {
+        if seen.insert(resolution.clone()) {
+            deduped.push(resolution);
+        }
+    }
+
+    deduped
 }
 
 #[cfg(test)]
@@ -246,11 +290,11 @@ mod tests {
             vec![],
             HashMap::from([(
                 main_cpp.clone(),
-                FileSearchPaths {
+                vec![FileSearchPaths {
                     quote_dirs: vec![quote_dir],
                     include_dirs: vec![include_dir],
                     system_dirs: vec![],
-                },
+                }],
             )]),
         );
         let include = parse_include_line(r#"#include "app.h""#, 1).unwrap();
@@ -281,11 +325,11 @@ mod tests {
             vec![],
             HashMap::from([(
                 main_cpp.clone(),
-                FileSearchPaths {
+                vec![FileSearchPaths {
                     quote_dirs: vec![],
                     include_dirs: vec![include_dir],
                     system_dirs: vec![],
-                },
+                }],
             )]),
         );
         let include = parse_include_line("#include <project/api.h>", 1).unwrap();

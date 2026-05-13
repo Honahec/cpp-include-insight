@@ -412,6 +412,80 @@ fn graph_compile_commands_resolves_per_translation_unit_include_dirs() {
 }
 
 #[test]
+fn graph_compile_commands_preserves_duplicate_file_contexts() {
+    let repo = tempfile::tempdir().unwrap();
+    let repo_path = repo.path();
+    fs::create_dir_all(repo_path.join("build")).unwrap();
+    fs::create_dir_all(repo_path.join("src")).unwrap();
+    fs::create_dir_all(repo_path.join("stage_a")).unwrap();
+    fs::create_dir_all(repo_path.join("stage_b")).unwrap();
+    fs::write(
+        repo_path.join("src/entry.cpp"),
+        "#include \"stage_leaf.hpp\"\n",
+    )
+    .unwrap();
+    fs::write(repo_path.join("stage_a/stage_leaf.hpp"), "").unwrap();
+    fs::write(repo_path.join("stage_b/stage_leaf.hpp"), "").unwrap();
+    fs::write(
+        repo_path.join("build/compile_commands.json"),
+        format!(
+            r#"[
+  {{
+    "directory": "{}",
+    "file": "../src/entry.cpp",
+    "arguments": ["c++", "-I../stage_a", "../src/entry.cpp"]
+  }},
+  {{
+    "directory": "{}",
+    "file": "../src/entry.cpp",
+    "arguments": ["c++", "-I../stage_b", "../src/entry.cpp"]
+  }}
+]"#,
+            repo_path.join("build").display(),
+            repo_path.join("build").display(),
+        ),
+    )
+    .unwrap();
+
+    let stdout = run_cli_in(
+        &[
+            "graph",
+            "--compile-commands",
+            "build/compile_commands.json",
+            "--format",
+            "json",
+        ],
+        Some(repo_path),
+    );
+    let json: Value = serde_json::from_str(&stdout).unwrap();
+    let files = json["files"].as_array().unwrap();
+    let path_for_id = |id: usize| -> String {
+        files.iter().find(|file| file["id"] == id).unwrap()["path"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+
+    let resolved_edges = json["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|edge| {
+            let from = edge["from"].as_u64()? as usize;
+            let to = edge["to"]["resolved"].as_u64()? as usize;
+            Some((path_for_id(from), path_for_id(to)))
+        })
+        .collect::<Vec<_>>();
+
+    assert!(resolved_edges.iter().any(|(from, to)| {
+        from.ends_with("src/entry.cpp") && to.ends_with("stage_a/stage_leaf.hpp")
+    }));
+    assert!(resolved_edges.iter().any(|(from, to)| {
+        from.ends_with("src/entry.cpp") && to.ends_with("stage_b/stage_leaf.hpp")
+    }));
+}
+
+#[test]
 fn scan_compile_commands_records_conditional_textual_includes_without_macro_expansion() {
     let repo = tempfile::tempdir().unwrap();
     let repo_path = repo.path();

@@ -62,21 +62,23 @@ impl IncludeGraph {
             let from = graph.get_or_add_file_id(&file.file, &mut file_ids);
 
             for include in &file.includes {
-                let to = match resolver.resolve_include(&file.file, include) {
-                    IncludeResolution::Resolved(path) => {
-                        IncludeTarget::Resolved(graph.get_or_add_file_id(&path, &mut file_ids))
-                    }
-                    IncludeResolution::External(path) => IncludeTarget::External(path),
-                    IncludeResolution::Missing(path) => IncludeTarget::Missing(path),
-                };
+                for resolution in resolver.resolve_includes(&file.file, include) {
+                    let to = match resolution {
+                        IncludeResolution::Resolved(path) => {
+                            IncludeTarget::Resolved(graph.get_or_add_file_id(&path, &mut file_ids))
+                        }
+                        IncludeResolution::External(path) => IncludeTarget::External(path),
+                        IncludeResolution::Missing(path) => IncludeTarget::Missing(path),
+                    };
 
-                graph.edges.push(IncludeEdge {
-                    from,
-                    to,
-                    include_path: include.path.clone(),
-                    kind: include.kind,
-                    line: include.line,
-                });
+                    graph.edges.push(IncludeEdge {
+                        from,
+                        to,
+                        include_path: include.path.clone(),
+                        kind: include.kind,
+                        line: include.line,
+                    });
+                }
             }
         }
 

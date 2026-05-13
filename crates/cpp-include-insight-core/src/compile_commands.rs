@@ -1,12 +1,12 @@
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct FileSearchPaths {
     pub quote_dirs: Vec<PathBuf>,
     pub include_dirs: Vec<PathBuf>,
@@ -63,11 +63,23 @@ pub fn load_compilation_database(path: impl AsRef<Path>) -> Result<CompilationDa
 }
 
 impl CompilationDatabase {
-    pub fn file_search_paths(&self) -> HashMap<PathBuf, FileSearchPaths> {
-        self.commands
-            .iter()
-            .map(|command| (normalize_path(&command.file), command.search_paths.clone()))
-            .collect()
+    pub fn file_search_paths(&self) -> HashMap<PathBuf, Vec<FileSearchPaths>> {
+        let mut paths_by_file = HashMap::new();
+        let mut seen = HashSet::new();
+
+        for command in &self.commands {
+            let file = normalize_path(&command.file);
+            let search_paths = command.search_paths.clone();
+
+            if seen.insert((file.clone(), search_paths.clone())) {
+                paths_by_file
+                    .entry(file)
+                    .or_insert_with(Vec::new)
+                    .push(search_paths);
+            }
+        }
+
+        paths_by_file
     }
 
     pub fn rebase_paths(&self, from_root: &Path, to_root: &Path) -> Self {
