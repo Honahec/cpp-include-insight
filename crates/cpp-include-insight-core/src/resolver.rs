@@ -1,12 +1,17 @@
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
-use crate::{IncludeDirective, IncludeKind};
+use crate::{FileSearchPaths, IncludeDirective, IncludeKind};
 
 #[derive(Debug, Clone)]
 pub struct IncludeResolver {
     root: PathBuf,
     include_dirs: Vec<PathBuf>,
+    file_search_paths: HashMap<PathBuf, FileSearchPaths>,
+    resolve_angle_in_search_paths: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,7 +37,26 @@ impl IncludeResolver {
             })
             .collect();
 
-        Self { root, include_dirs }
+        Self {
+            root,
+            include_dirs,
+            file_search_paths: HashMap::new(),
+            resolve_angle_in_search_paths: false,
+        }
+    }
+
+    pub fn with_file_search_paths(
+        root: impl Into<PathBuf>,
+        include_dirs: Vec<PathBuf>,
+        file_search_paths: HashMap<PathBuf, FileSearchPaths>,
+    ) -> Self {
+        let mut resolver = Self::new(root, include_dirs);
+        resolver.file_search_paths = file_search_paths
+            .into_iter()
+            .map(|(file, paths)| (normalize_path(&file), paths))
+            .collect();
+        resolver.resolve_angle_in_search_paths = true;
+        resolver
     }
 
     pub fn resolve_include(
@@ -41,6 +65,9 @@ impl IncludeResolver {
         include: &IncludeDirective,
     ) -> IncludeResolution {
         match include.kind {
+            IncludeKind::Angle if self.resolve_angle_in_search_paths => {
+                self.resolve_angle_include(including_file.as_ref(), include)
+            }
             IncludeKind::Angle => IncludeResolution::External(include.path.clone()),
             IncludeKind::Quote => self.resolve_quote_include(including_file.as_ref(), include),
         }
@@ -61,15 +88,69 @@ impl IncludeResolver {
             }
         }
 
-        for include_dir in &self.include_dirs {
+        let search_paths = self.search_paths_for(including_file);
+
+        for include_dir in search_paths
+            .quote_dirs
+            .iter()
+            .chain(search_paths.include_dirs.iter())
+            .chain(search_paths.system_dirs.iter())
+        {
             let candidate = include_dir.join(include_path);
 
             if candidate.is_file() {
-                return IncludeResolution::Resolved(candidate);
+                return self.resolve_candidate_or_external(candidate, include);
             }
         }
 
         IncludeResolution::Missing(include.path.clone())
+    }
+
+    fn resolve_angle_include(
+        &self,
+        including_file: &Path,
+        include: &IncludeDirective,
+    ) -> IncludeResolution {
+        let include_path = Path::new(&include.path);
+        let search_paths = self.search_paths_for(including_file);
+
+        for include_dir in search_paths
+            .include_dirs
+            .iter()
+            .chain(search_paths.system_dirs.iter())
+        {
+            let candidate = include_dir.join(include_path);
+
+            if candidate.is_file() {
+                return self.resolve_candidate_or_external(candidate, include);
+            }
+        }
+
+        IncludeResolution::External(include.path.clone())
+    }
+
+    fn resolve_candidate_or_external(
+        &self,
+        candidate: PathBuf,
+        include: &IncludeDirective,
+    ) -> IncludeResolution {
+        let candidate = normalize_path(&candidate);
+
+        if is_under_root(&candidate, &self.root) {
+            IncludeResolution::Resolved(candidate)
+        } else {
+            IncludeResolution::External(include.path.clone())
+        }
+    }
+
+    fn search_paths_for(&self, including_file: &Path) -> FileSearchPaths {
+        let mut search_paths = self
+            .file_search_paths
+            .get(&normalize_path(including_file))
+            .cloned()
+            .unwrap_or_default();
+        search_paths.extend_include_dirs(self.include_dirs.clone());
+        search_paths
     }
 
     pub fn root(&self) -> &Path {
@@ -79,6 +160,16 @@ impl IncludeResolver {
     pub fn include_dirs(&self) -> &[PathBuf] {
         &self.include_dirs
     }
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn is_under_root(path: &Path, root: &Path) -> bool {
+    let path = normalize_path(path);
+    let root = normalize_path(root);
+    path.starts_with(root)
 }
 
 #[cfg(test)]
@@ -129,6 +220,79 @@ mod tests {
         let resolution = resolver.resolve_include(&main_cpp, &include);
 
         assert_eq!(resolution, IncludeResolution::Resolved(app_h));
+    }
+
+    #[test]
+    fn resolves_quote_include_from_compile_command_iquote_before_include_dir() {
+        let temp = tempdir().unwrap();
+        let src_dir = temp.path().join("src");
+        let quote_dir = temp.path().join("quote");
+        let include_dir = temp.path().join("include");
+
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::create_dir_all(&quote_dir).unwrap();
+        fs::create_dir_all(&include_dir).unwrap();
+
+        let main_cpp = src_dir.join("main.cpp");
+        let quote_app = quote_dir.join("app.h");
+        let include_app = include_dir.join("app.h");
+
+        fs::write(&main_cpp, "").unwrap();
+        fs::write(&quote_app, "").unwrap();
+        fs::write(&include_app, "").unwrap();
+
+        let resolver = IncludeResolver::with_file_search_paths(
+            temp.path(),
+            vec![],
+            HashMap::from([(
+                main_cpp.clone(),
+                FileSearchPaths {
+                    quote_dirs: vec![quote_dir],
+                    include_dirs: vec![include_dir],
+                    system_dirs: vec![],
+                },
+            )]),
+        );
+        let include = parse_include_line(r#"#include "app.h""#, 1).unwrap();
+
+        let resolution = resolver.resolve_include(&main_cpp, &include);
+
+        assert_eq!(resolution, IncludeResolution::Resolved(quote_app));
+    }
+
+    #[test]
+    fn resolves_angle_include_from_compile_command_include_dir() {
+        let temp = tempdir().unwrap();
+        let src_dir = temp.path().join("src");
+        let include_dir = temp.path().join("include");
+
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::create_dir_all(&include_dir).unwrap();
+
+        let main_cpp = src_dir.join("main.cpp");
+        let api_h = include_dir.join("project/api.h");
+
+        fs::create_dir_all(api_h.parent().unwrap()).unwrap();
+        fs::write(&main_cpp, "").unwrap();
+        fs::write(&api_h, "").unwrap();
+
+        let resolver = IncludeResolver::with_file_search_paths(
+            temp.path(),
+            vec![],
+            HashMap::from([(
+                main_cpp.clone(),
+                FileSearchPaths {
+                    quote_dirs: vec![],
+                    include_dirs: vec![include_dir],
+                    system_dirs: vec![],
+                },
+            )]),
+        );
+        let include = parse_include_line("#include <project/api.h>", 1).unwrap();
+
+        let resolution = resolver.resolve_include(&main_cpp, &include);
+
+        assert_eq!(resolution, IncludeResolution::Resolved(api_h));
     }
 
     #[test]

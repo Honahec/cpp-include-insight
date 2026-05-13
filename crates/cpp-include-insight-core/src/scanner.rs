@@ -1,6 +1,10 @@
-use crate::parser::{IncludeDirective, parse_include_line};
+use crate::{
+    compile_commands::CompilationDatabase,
+    parser::{IncludeDirective, parse_include_line},
+};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -61,6 +65,42 @@ pub fn scan_project(root: impl AsRef<Path>, _options: &ScanOptions) -> Result<Sc
     Ok(result)
 }
 
+pub fn scan_compilation_database(database: &CompilationDatabase) -> Result<ScanResult> {
+    let mut result = ScanResult::default();
+    let mut seen = HashSet::new();
+
+    for command in &database.commands {
+        if !seen.insert(normalize_path(&command.file)) {
+            continue;
+        }
+
+        scan_file(&command.file, &mut result)?;
+    }
+
+    Ok(result)
+}
+
+fn scan_file(path: &Path, result: &mut ScanResult) -> Result<()> {
+    let content =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+
+    let includes = content
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| parse_include_line(line, index + 1))
+        .collect::<Vec<_>>();
+
+    result.files_scanned += 1;
+    result.includes_found += includes.len();
+
+    result.files.push(FileIncludes {
+        file: path.to_path_buf(),
+        includes,
+    });
+
+    Ok(())
+}
+
 fn should_ignore(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
@@ -87,6 +127,10 @@ fn is_cpp_like_file(path: &Path) -> bool {
     )
 }
 
+fn normalize_path(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,5 +155,44 @@ mod tests {
 
         assert_eq!(result.files_scanned, 1);
         assert_eq!(result.files[0].file, src_dir.join("main.cpp"));
+    }
+
+    #[test]
+    fn scans_unique_files_from_compilation_database() {
+        let temp = tempdir().unwrap();
+        let src_dir = temp.path().join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        let main_cpp = src_dir.join("main.cpp");
+        fs::write(&main_cpp, "#include \"app.h\"\n").unwrap();
+
+        let database = CompilationDatabase {
+            commands: vec![
+                crate::CompileCommand {
+                    directory: temp.path().to_path_buf(),
+                    file: main_cpp.clone(),
+                    output: None,
+                    raw_command: None,
+                    arguments: vec!["c++".to_owned(), "src/main.cpp".to_owned()],
+                    search_paths: crate::FileSearchPaths::default(),
+                    defines: Vec::new(),
+                    undefines: Vec::new(),
+                },
+                crate::CompileCommand {
+                    directory: temp.path().to_path_buf(),
+                    file: main_cpp,
+                    output: None,
+                    raw_command: None,
+                    arguments: vec!["c++".to_owned(), "src/main.cpp".to_owned()],
+                    search_paths: crate::FileSearchPaths::default(),
+                    defines: Vec::new(),
+                    undefines: Vec::new(),
+                },
+            ],
+        };
+
+        let result = scan_compilation_database(&database).unwrap();
+
+        assert_eq!(result.files_scanned, 1);
+        assert_eq!(result.includes_found, 1);
     }
 }
