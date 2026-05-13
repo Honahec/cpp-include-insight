@@ -70,6 +70,10 @@ pub fn scan_compilation_database(database: &CompilationDatabase) -> Result<ScanR
     let mut seen = HashSet::new();
 
     for command in &database.commands {
+        if should_skip_compilation_database_file(&command.file) {
+            continue;
+        }
+
         if !seen.insert(normalize_path(&command.file)) {
             continue;
         }
@@ -125,6 +129,15 @@ fn is_cpp_like_file(path: &Path) -> bool {
         path.extension().and_then(|ext| ext.to_str()),
         Some("c" | "cc" | "cpp" | "cxx" | "h" | "hh" | "hpp" | "hxx")
     )
+}
+
+fn should_skip_compilation_database_file(path: &Path) -> bool {
+    let path = normalize_path(path);
+
+    !path.is_file()
+        || path
+            .components()
+            .any(|component| should_ignore(Path::new(component.as_os_str())))
 }
 
 fn normalize_path(path: &Path) -> PathBuf {
@@ -194,5 +207,61 @@ mod tests {
 
         assert_eq!(result.files_scanned, 1);
         assert_eq!(result.includes_found, 1);
+    }
+
+    #[test]
+    fn skips_build_artifacts_and_missing_files_from_compilation_database() {
+        let temp = tempdir().unwrap();
+        let src_dir = temp.path().join("src");
+        let build_dir = temp.path().join("build/generated");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::create_dir_all(&build_dir).unwrap();
+
+        let app_cpp = src_dir.join("app.cpp");
+        let generated_cpp = build_dir.join("generated.cpp");
+        let missing_cpp = src_dir.join("missing.cpp");
+        fs::write(&app_cpp, "#include \"app.h\"\n").unwrap();
+        fs::write(&generated_cpp, "#include \"generated.h\"\n").unwrap();
+
+        let database = CompilationDatabase {
+            commands: vec![
+                crate::CompileCommand {
+                    directory: temp.path().to_path_buf(),
+                    file: app_cpp.clone(),
+                    output: None,
+                    raw_command: None,
+                    arguments: vec!["c++".to_owned(), "src/app.cpp".to_owned()],
+                    search_paths: crate::FileSearchPaths::default(),
+                    defines: Vec::new(),
+                    undefines: Vec::new(),
+                },
+                crate::CompileCommand {
+                    directory: temp.path().to_path_buf(),
+                    file: generated_cpp,
+                    output: None,
+                    raw_command: None,
+                    arguments: vec!["c++".to_owned(), "build/generated/generated.cpp".to_owned()],
+                    search_paths: crate::FileSearchPaths::default(),
+                    defines: Vec::new(),
+                    undefines: Vec::new(),
+                },
+                crate::CompileCommand {
+                    directory: temp.path().to_path_buf(),
+                    file: missing_cpp,
+                    output: None,
+                    raw_command: None,
+                    arguments: vec!["c++".to_owned(), "src/missing.cpp".to_owned()],
+                    search_paths: crate::FileSearchPaths::default(),
+                    defines: Vec::new(),
+                    undefines: Vec::new(),
+                },
+            ],
+        };
+
+        let result = scan_compilation_database(&database).unwrap();
+
+        assert_eq!(result.files_scanned, 1);
+        assert_eq!(result.includes_found, 1);
+        assert_eq!(result.files[0].file, app_cpp);
     }
 }
