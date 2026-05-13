@@ -1,6 +1,10 @@
 name: cpp-include-insight
 description: Run cpp-include-insight include graph reports and CI checks on pull requests.
 
+branding:
+  icon: search
+  color: blue
+
 inputs:
   base:
     description: Base Git revision or ref to compare against HEAD.
