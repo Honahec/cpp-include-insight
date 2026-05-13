@@ -10,6 +10,14 @@ inputs:
     description: Whitespace-separated include directories passed as -I arguments.
     required: false
     default: ""
+  compile-commands:
+    description: Path to compile_commands.json used for precise per-translation-unit include resolution.
+    required: false
+    default: ""
+  build-command:
+    description: Optional command that generates compile_commands.json before analysis.
+    required: false
+    default: ""
   config:
     description: Optional cpp-include-insight JSON config path for CI threshold rules.
     required: false
@@ -48,11 +56,21 @@ runs:
         set -euo pipefail
         cargo build --locked --release --manifest-path "$GITHUB_ACTION_PATH/crates/cpp-include-insight-cli/Cargo.toml"
 
+    - name: Generate compilation database
+      if: ${{ inputs.build-command != '' }}
+      shell: bash
+      env:
+        CPP_INCLUDE_INSIGHT_BUILD_COMMAND: ${{ inputs.build-command }}
+      run: |
+        set -euo pipefail
+        bash -lc "$CPP_INCLUDE_INSIGHT_BUILD_COMMAND"
+
     - name: Generate include graph report
       id: report
       shell: bash
       env:
         CPP_INCLUDE_INSIGHT_BASE: ${{ inputs.base }}
+        CPP_INCLUDE_INSIGHT_COMPILE_COMMANDS: ${{ inputs.compile-commands }}
         CPP_INCLUDE_INSIGHT_INCLUDE_DIRS: ${{ inputs.include-dirs }}
         CPP_INCLUDE_INSIGHT_REPORT_PATH: ${{ inputs.report-path }}
       run: |
@@ -61,6 +79,19 @@ runs:
         cli="$GITHUB_ACTION_PATH/target/release/cpp-include-insight"
         report_path="$CPP_INCLUDE_INSIGHT_REPORT_PATH"
         include_args=()
+        compile_args=()
+
+        if [[ -z "$CPP_INCLUDE_INSIGHT_COMPILE_COMMANDS" ]]; then
+          echo "compile-commands input is required for the GitHub Action. Generate compile_commands.json first, then pass its path." >&2
+          exit 1
+        fi
+
+        if [[ ! -f "$CPP_INCLUDE_INSIGHT_COMPILE_COMMANDS" ]]; then
+          echo "compile-commands path does not exist: $CPP_INCLUDE_INSIGHT_COMPILE_COMMANDS" >&2
+          exit 1
+        fi
+
+        compile_args+=(--compile-commands "$CPP_INCLUDE_INSIGHT_COMPILE_COMMANDS")
 
         if [[ -z "$report_path" ]]; then
           echo "report-path input must not be empty." >&2
@@ -77,7 +108,7 @@ runs:
           mkdir -p "$report_parent"
         fi
 
-        "$cli" report --base "$CPP_INCLUDE_INSIGHT_BASE" --format markdown "${include_args[@]}" > "$report_path"
+        "$cli" report --base "$CPP_INCLUDE_INSIGHT_BASE" --format markdown "${compile_args[@]}" "${include_args[@]}" > "$report_path"
 
         {
           echo "report-path=$report_path"
@@ -92,6 +123,7 @@ runs:
       shell: bash
       env:
         CPP_INCLUDE_INSIGHT_BASE: ${{ inputs.base }}
+        CPP_INCLUDE_INSIGHT_COMPILE_COMMANDS: ${{ inputs.compile-commands }}
         CPP_INCLUDE_INSIGHT_CONFIG: ${{ inputs.config }}
         CPP_INCLUDE_INSIGHT_FAIL_ON_NEW_CYCLE: ${{ inputs.fail-on-new-cycle }}
         CPP_INCLUDE_INSIGHT_INCLUDE_DIRS: ${{ inputs.include-dirs }}
@@ -100,6 +132,19 @@ runs:
 
         cli="$GITHUB_ACTION_PATH/target/release/cpp-include-insight"
         include_args=()
+        compile_args=()
+
+        if [[ -z "$CPP_INCLUDE_INSIGHT_COMPILE_COMMANDS" ]]; then
+          echo "compile-commands input is required for the GitHub Action. Generate compile_commands.json first, then pass its path." >&2
+          exit 1
+        fi
+
+        if [[ ! -f "$CPP_INCLUDE_INSIGHT_COMPILE_COMMANDS" ]]; then
+          echo "compile-commands path does not exist: $CPP_INCLUDE_INSIGHT_COMPILE_COMMANDS" >&2
+          exit 1
+        fi
+
+        compile_args+=(--compile-commands "$CPP_INCLUDE_INSIGHT_COMPILE_COMMANDS")
 
         read -r -a include_dirs <<< "$CPP_INCLUDE_INSIGHT_INCLUDE_DIRS"
         for include_dir in "${include_dirs[@]}"; do
@@ -119,7 +164,7 @@ runs:
           exit 0
         fi
 
-        "$cli" "${ci_args[@]}" "${include_args[@]}"
+        "$cli" "${ci_args[@]}" "${compile_args[@]}" "${include_args[@]}"
 
     - name: Comment on pull request
       if: ${{ inputs.comment == 'true' && github.event_name == 'pull_request' }}

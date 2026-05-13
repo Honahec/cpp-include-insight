@@ -29,10 +29,20 @@ cpp-include-insight --help
 
 ## Usage
 
-Scan files and print include counts:
+Fast mode scans source text without invoking a compiler. It uses the including
+file directory plus any `-I` flags you pass:
 
 ```bash
 cpp-include-insight scan . -I include
+```
+
+Compilation database mode reads `compile_commands.json` and applies each
+translation unit's `-iquote`, `-I`, and project-local `-isystem` paths:
+
+```bash
+cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+cpp-include-insight scan --compile-commands build/compile_commands.json
+cpp-include-insight graph --compile-commands build/compile_commands.json --format json
 ```
 
 Write graph JSON:
@@ -64,6 +74,7 @@ Compare include graph changes between Git revisions and render a Markdown report
 ```bash
 cpp-include-insight diff main...HEAD -I include
 cpp-include-insight report --base main --format markdown -I include
+cpp-include-insight report --base main --compile-commands build/compile_commands.json --format markdown
 ```
 
 `diff A...B` compares the merge-base of `A` and `B` against `B`. `diff A..B`
@@ -129,6 +140,8 @@ jobs:
 
       - uses: Honahec/cpp-include-insight@v1
         with:
+          build-command: cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          compile-commands: build/compile_commands.json
           base: origin/main
           fail-on-new-cycle: true
           comment: true
@@ -140,11 +153,18 @@ Inputs:
 | --- | --- | --- |
 | `base` | `origin/main` | Base Git revision or ref compared against `HEAD`. |
 | `include-dirs` | empty | Whitespace-separated include directories passed as `-I`. |
+| `compile-commands` | empty | Path to `compile_commands.json`; required by the Action. |
+| `build-command` | empty | Optional command that generates `compile_commands.json` before analysis. |
 | `config` | empty | Optional `cpp-include-insight.json` path for CI threshold rules. |
 | `fail-on-new-cycle` | `false` | Fail when the PR introduces a new project include cycle. |
 | `comment` | `false` | Post or update a pull request comment with the Markdown report. |
 | `report-path` | `cpp-include-insight-report.md` | Markdown report output path. |
 | `github-token` | `${{ github.token }}` | Token used for PR comments. |
+
+The action requires `compile-commands` so pull request reports are based on the
+same include search paths used by the build. `build-command` is optional because
+projects generate compilation databases through different tools such as CMake,
+Meson, or `bear -- make`.
 
 The action always writes a Markdown report and exposes it through the
 `report-path` and `report` outputs. When `comment: true`, the action creates a
@@ -167,8 +187,14 @@ The current scanner supports direct includes:
 # include "foo/bar.hpp"
 ```
 
-It does not expand macro includes or evaluate conditional compilation. Angle
-includes are treated as external in fast scan mode.
+It does not expand macro includes or run a full C/C++ preprocessor. Fast mode
+records direct textual include directives conservatively, including directives
+inside conditional branches. Compilation database mode stores `-D` and `-U`
+metadata for future conditional analysis and improves include path resolution,
+but conditional evaluation is still out of scope for the current MVP. Angle
+includes are treated as external in fast scan mode; in compilation database mode
+project-local angle includes can resolve through `-I` or project-local
+`-isystem` paths.
 
 ## Development
 
@@ -176,6 +202,7 @@ Run the CLI from a checkout:
 
 ```bash
 cargo run -q -p cpp-include-insight -- scan . -I include
+cargo run -q -p cpp-include-insight -- graph --compile-commands build/compile_commands.json --format json
 cargo run -q -p cpp-include-insight -- report --base main --format markdown -I include
 ```
 

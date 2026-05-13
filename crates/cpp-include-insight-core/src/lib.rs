@@ -1,4 +1,5 @@
 pub mod analysis;
+pub mod compile_commands;
 pub mod graph;
 pub mod output;
 pub mod parser;
@@ -12,6 +13,9 @@ pub use analysis::impact::{
 pub use analysis::why::{
     DEFAULT_MAX_WHY_PATHS, IncludePath, WhyOptions, WhyResult, find_include_paths,
     render_why_result,
+};
+pub use compile_commands::{
+    CompilationDatabase, CompileCommand, FileSearchPaths, load_compilation_database,
 };
 pub use graph::{FileId, FileNode, IncludeEdge, IncludeGraph, IncludeGraphStats, IncludeTarget};
 pub use output::ci::{
@@ -32,4 +36,4 @@ pub use output::snapshot::{
 pub use output::tree::{render_include_tree, render_reverse_include_tree};
 pub use parser::{IncludeDirective, IncludeKind};
 pub use resolver::{IncludeResolution, IncludeResolver};
-pub use scanner::{ScanOptions, ScanResult, scan_project};
+pub use scanner::{ScanOptions, ScanResult, scan_compilation_database, scan_project};

@@ -296,6 +296,172 @@ fn scan_text_reports_resolution_counts() {
 }
 
 #[test]
+fn scan_compile_commands_reads_arguments_and_command_forms() {
+    let repo = tempfile::tempdir().unwrap();
+    let repo_path = repo.path();
+    fs::create_dir_all(repo_path.join("build")).unwrap();
+    fs::create_dir_all(repo_path.join("src")).unwrap();
+    fs::create_dir_all(repo_path.join("include")).unwrap();
+    fs::write(repo_path.join("src/app.cpp"), "#include \"app.h\"\n").unwrap();
+    fs::write(repo_path.join("src/tool.cpp"), "#include \"tool.h\"\n").unwrap();
+    fs::write(repo_path.join("include/app.h"), "").unwrap();
+    fs::write(repo_path.join("include/tool.h"), "").unwrap();
+    fs::write(
+        repo_path.join("build/compile_commands.json"),
+        format!(
+            r#"[
+  {{
+    "directory": "{}",
+    "file": "../src/app.cpp",
+    "arguments": ["c++", "-I../include", "-DAPP=1", "../src/app.cpp"]
+  }},
+  {{
+    "directory": "{}",
+    "file": "{}",
+    "command": "c++ -I include -UTOOL {}"
+  }}
+]"#,
+            repo_path.join("build").display(),
+            repo_path.display(),
+            repo_path.join("src/tool.cpp").display(),
+            repo_path.join("src/tool.cpp").display(),
+        ),
+    )
+    .unwrap();
+
+    let stdout = run_cli_in(
+        &["scan", "--compile-commands", "build/compile_commands.json"],
+        Some(repo_path),
+    );
+
+    assert!(stdout.contains("Scanned 2 files."));
+    assert!(stdout.contains("Found 2 include directives."));
+    assert!(stdout.contains("Resolved 2 project includes."));
+    assert!(stdout.contains("Missing includes: 0"));
+}
+
+#[test]
+fn graph_compile_commands_resolves_per_translation_unit_include_dirs() {
+    let repo = tempfile::tempdir().unwrap();
+    let repo_path = repo.path();
+    fs::create_dir_all(repo_path.join("build")).unwrap();
+    fs::create_dir_all(repo_path.join("src")).unwrap();
+    fs::create_dir_all(repo_path.join("generated/app")).unwrap();
+    fs::create_dir_all(repo_path.join("generated/tool")).unwrap();
+    fs::write(repo_path.join("src/app.cpp"), "#include \"config.h\"\n").unwrap();
+    fs::write(repo_path.join("src/tool.cpp"), "#include \"config.h\"\n").unwrap();
+    fs::write(repo_path.join("generated/app/config.h"), "").unwrap();
+    fs::write(repo_path.join("generated/tool/config.h"), "").unwrap();
+    fs::write(
+        repo_path.join("build/compile_commands.json"),
+        format!(
+            r#"[
+  {{
+    "directory": "{}",
+    "file": "../src/app.cpp",
+    "arguments": ["c++", "-I../generated/app", "../src/app.cpp"]
+  }},
+  {{
+    "directory": "{}",
+    "file": "../src/tool.cpp",
+    "arguments": ["c++", "-I../generated/tool", "../src/tool.cpp"]
+  }}
+]"#,
+            repo_path.join("build").display(),
+            repo_path.join("build").display(),
+        ),
+    )
+    .unwrap();
+
+    let stdout = run_cli_in(
+        &[
+            "graph",
+            "--compile-commands",
+            "build/compile_commands.json",
+            "--format",
+            "json",
+        ],
+        Some(repo_path),
+    );
+    let json: Value = serde_json::from_str(&stdout).unwrap();
+    let files = json["files"].as_array().unwrap();
+    let path_for_id = |id: usize| -> String {
+        files.iter().find(|file| file["id"] == id).unwrap()["path"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+
+    let resolved_edges = json["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|edge| {
+            let from = edge["from"].as_u64()? as usize;
+            let to = edge["to"]["resolved"].as_u64()? as usize;
+            Some((path_for_id(from), path_for_id(to)))
+        })
+        .collect::<Vec<_>>();
+
+    assert!(resolved_edges.iter().any(|(from, to)| {
+        from.ends_with("src/app.cpp") && to.ends_with("generated/app/config.h")
+    }));
+    assert!(resolved_edges.iter().any(|(from, to)| {
+        from.ends_with("src/tool.cpp") && to.ends_with("generated/tool/config.h")
+    }));
+}
+
+#[test]
+fn scan_compile_commands_records_conditional_textual_includes_without_macro_expansion() {
+    let repo = tempfile::tempdir().unwrap();
+    let repo_path = repo.path();
+    fs::create_dir_all(repo_path.join("build")).unwrap();
+    fs::create_dir_all(repo_path.join("src")).unwrap();
+    fs::create_dir_all(repo_path.join("include")).unwrap();
+    fs::write(
+        repo_path.join("src/app.cpp"),
+        concat!(
+            "#ifdef USE_A\n",
+            "#include \"a.h\"\n",
+            "#else\n",
+            "#include \"b.h\"\n",
+            "#endif\n",
+            "#define HEADER \"macro.h\"\n",
+            "#include HEADER\n",
+        ),
+    )
+    .unwrap();
+    fs::write(repo_path.join("include/a.h"), "").unwrap();
+    fs::write(repo_path.join("include/b.h"), "").unwrap();
+    fs::write(repo_path.join("include/macro.h"), "").unwrap();
+    fs::write(
+        repo_path.join("build/compile_commands.json"),
+        format!(
+            r#"[
+  {{
+    "directory": "{}",
+    "file": "../src/app.cpp",
+    "arguments": ["c++", "-I../include", "-DUSE_A", "../src/app.cpp"]
+  }}
+]"#,
+            repo_path.join("build").display(),
+        ),
+    )
+    .unwrap();
+
+    let stdout = run_cli_in(
+        &["scan", "--compile-commands", "build/compile_commands.json"],
+        Some(repo_path),
+    );
+
+    assert!(stdout.contains("Found 2 include directives."));
+    assert!(stdout.contains("Resolved 2 project includes."));
+    assert!(stdout.contains("a.h"));
+    assert!(stdout.contains("b.h"));
+    assert!(!stdout.contains("macro.h"));
+}
+
+#[test]
 fn tree_outputs_forward_include_tree() {
     let fixture = fixture_path("tree-normal");
     let stdout = run_cli_in(&["tree", "src/main.cpp", "-I", "include"], Some(&fixture));
@@ -1143,12 +1309,18 @@ fn github_action_metadata_supports_pull_request_report_inputs() {
 
     assert!(action.contains("using: composite"));
     assert!(action.contains("base:"));
+    assert!(action.contains("compile-commands:"));
+    assert!(action.contains("build-command:"));
     assert!(action.contains("fail-on-new-cycle:"));
     assert!(action.contains("comment:"));
     assert!(action.contains("report-path:"));
     assert!(action.contains("cargo build --locked --release"));
+    assert!(action.contains("Generate compilation database"));
     assert!(action.contains("report --base"));
+    assert!(action.contains("--compile-commands"));
     assert!(action.contains("CPP_INCLUDE_INSIGHT_INCLUDE_DIRS"));
+    assert!(action.contains("CPP_INCLUDE_INSIGHT_COMPILE_COMMANDS"));
+    assert!(action.contains("compile-commands input is required"));
     assert!(action.contains("mkdir -p \"$report_parent\""));
     assert!(action.contains("scripts/comment-pr-report.sh"));
 
@@ -1171,6 +1343,10 @@ fn include_insight_workflow_uses_full_checkout_and_comment_permissions() {
     assert!(workflow.contains("pull_request:"));
     assert!(workflow.contains("pull-requests: write"));
     assert!(workflow.contains("fetch-depth: 0"));
+    assert!(
+        workflow.contains("build-command: cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON")
+    );
+    assert!(workflow.contains("compile-commands: build/compile_commands.json"));
     assert!(workflow.contains("fail-on-new-cycle: true"));
     assert!(workflow.contains("comment: true"));
     assert!(workflow.contains("actions/upload-artifact@v4"));

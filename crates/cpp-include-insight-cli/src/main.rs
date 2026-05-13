@@ -1,13 +1,14 @@
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use cpp_include_insight_core::{
-    DEFAULT_MAX_WHY_PATHS, IncludeGraph, IncludeResolver, MermaidOptions, ScanOptions,
-    SnapshotOptions, WhyOptions, analyze_include_impact, build_include_graph_snapshot,
-    detect_include_cycles, diff_include_graph_snapshots, evaluate_ci_rules, find_include_paths,
-    graph_to_json_value, load_include_graph_snapshot, render_ci_check_report, render_impact_result,
+    CompilationDatabase, DEFAULT_MAX_WHY_PATHS, IncludeGraph, IncludeResolver, MermaidOptions,
+    ScanOptions, ScanResult, SnapshotOptions, WhyOptions, analyze_include_impact,
+    build_include_graph_snapshot, detect_include_cycles, diff_include_graph_snapshots,
+    evaluate_ci_rules, find_include_paths, graph_to_json_value, load_compilation_database,
+    load_include_graph_snapshot, render_ci_check_report, render_impact_result,
     render_include_cycles, render_include_tree, render_markdown_report, render_mermaid_graph,
     render_reverse_include_tree, render_snapshot_diff, render_snapshot_diff_with_impact,
-    render_why_result, scan_project,
+    render_why_result, scan_compilation_database, scan_project,
 };
 use std::{
     fs,
@@ -28,12 +29,17 @@ struct Cli {
 enum Command {
     /// Scan C/C++ files and print include directives.
     Scan {
-        /// Project root
+        /// Project root used by fast mode.
+        #[arg(default_value = ".")]
         path: PathBuf,
 
         /// Include directories.
         #[arg(short = 'I', long = "include-dir")]
         include_dirs: Vec<PathBuf>,
+
+        /// Compilation database for precise mode.
+        #[arg(long = "compile-commands")]
+        compile_commands: Option<PathBuf>,
 
         /// Output format.
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
@@ -43,11 +49,16 @@ enum Command {
     /// Build the include dependency graph.
     Graph {
         /// Project root or root file for graph slices.
+        #[arg(default_value = ".")]
         path: PathBuf,
 
         /// Include directories.
         #[arg(short = 'I', long = "include-dir")]
         include_dirs: Vec<PathBuf>,
+
+        /// Compilation database for precise mode.
+        #[arg(long = "compile-commands")]
+        compile_commands: Option<PathBuf>,
 
         /// Output format.
         #[arg(long, value_enum, default_value_t = GraphOutputFormat::Json)]
@@ -130,11 +141,16 @@ enum Command {
     /// Write a stable, versioned include graph snapshot.
     Snapshot {
         /// Project root
+        #[arg(default_value = ".")]
         path: PathBuf,
 
         /// Include directories.
         #[arg(short = 'I', long = "include-dir")]
         include_dirs: Vec<PathBuf>,
+
+        /// Compilation database for precise mode.
+        #[arg(long = "compile-commands")]
+        compile_commands: Option<PathBuf>,
 
         /// Snapshot output file.
         #[arg(short = 'o', long = "output")]
@@ -155,6 +171,10 @@ enum Command {
         #[arg(short = 'I', long = "include-dir")]
         include_dirs: Vec<PathBuf>,
 
+        /// Compilation database used when diffing Git revisions.
+        #[arg(long = "compile-commands")]
+        compile_commands: Option<PathBuf>,
+
         /// Exit with failure when the diff introduces a new include cycle.
         #[arg(long = "fail-on-new-cycle")]
         fail_on_new_cycle: bool,
@@ -174,6 +194,10 @@ enum Command {
         #[arg(short = 'I', long = "include-dir")]
         include_dirs: Vec<PathBuf>,
 
+        /// Compilation database used when diffing Git revisions.
+        #[arg(long = "compile-commands")]
+        compile_commands: Option<PathBuf>,
+
         /// Output format.
         #[arg(long, value_enum, default_value_t = ReportOutputFormat::Markdown)]
         format: ReportOutputFormat,
@@ -192,6 +216,10 @@ enum Command {
         /// Include directories used when diffing Git revisions.
         #[arg(short = 'I', long = "include-dir")]
         include_dirs: Vec<PathBuf>,
+
+        /// Compilation database used when diffing Git revisions.
+        #[arg(long = "compile-commands")]
+        compile_commands: Option<PathBuf>,
     },
 }
 
@@ -231,14 +259,10 @@ fn main() -> Result<()> {
         Command::Scan {
             path,
             include_dirs,
+            compile_commands,
             format,
         } => {
-            let options = ScanOptions {
-                include_dirs: include_dirs.clone(),
-            };
-            let result = scan_project(&path, &options)?;
-            let resolver = IncludeResolver::new(&path, include_dirs);
-            let graph = IncludeGraph::from_scan_result(&result, &resolver);
+            let (result, graph) = scan_and_graph(&path, include_dirs, compile_commands)?;
 
             match format {
                 OutputFormat::Text => {
@@ -271,17 +295,13 @@ fn main() -> Result<()> {
         Command::Graph {
             path,
             include_dirs,
+            compile_commands,
             format,
             depth,
             no_external,
         } => {
             let (project_root, root_file) = graph_input_context(&path)?;
-            let options = ScanOptions {
-                include_dirs: include_dirs.clone(),
-            };
-            let result = scan_project(&project_root, &options)?;
-            let resolver = IncludeResolver::new(&project_root, include_dirs);
-            let graph = IncludeGraph::from_scan_result(&result, &resolver);
+            let (_, graph) = scan_and_graph(&project_root, include_dirs, compile_commands)?;
 
             match format {
                 GraphOutputFormat::Json => {
@@ -462,15 +482,11 @@ fn main() -> Result<()> {
         Command::Snapshot {
             path,
             include_dirs,
+            compile_commands,
             output,
             absolute_paths,
         } => {
-            let options = ScanOptions {
-                include_dirs: include_dirs.clone(),
-            };
-            let result = scan_project(&path, &options)?;
-            let resolver = IncludeResolver::new(&path, include_dirs);
-            let graph = IncludeGraph::from_scan_result(&result, &resolver);
+            let (_, graph) = scan_and_graph(&path, include_dirs, compile_commands)?;
             let cycles = detect_include_cycles(&graph);
             let snapshot = build_include_graph_snapshot(
                 &graph,
@@ -493,12 +509,14 @@ fn main() -> Result<()> {
         Command::Diff {
             inputs,
             include_dirs,
+            compile_commands,
             fail_on_new_cycle,
             impact,
         } => {
             let diff = match inputs.as_slice() {
                 [range] if is_git_revision_range(range) => {
-                    let (old, new) = snapshots_from_git_range(range, include_dirs)?;
+                    let (old, new) =
+                        snapshots_from_git_range(range, include_dirs, compile_commands)?;
                     diff_include_graph_snapshots(&old, &new)?
                 }
                 [old, new] => {
@@ -528,6 +546,7 @@ fn main() -> Result<()> {
         Command::Report {
             base,
             include_dirs,
+            compile_commands,
             format,
         } => {
             if base.is_empty() {
@@ -535,7 +554,7 @@ fn main() -> Result<()> {
             }
 
             let range = format!("{base}...HEAD");
-            let (old, new) = snapshots_from_git_range(&range, include_dirs)?;
+            let (old, new) = snapshots_from_git_range(&range, include_dirs, compile_commands)?;
             let diff = diff_include_graph_snapshots(&old, &new)?;
 
             match format {
@@ -547,6 +566,7 @@ fn main() -> Result<()> {
             base,
             config,
             include_dirs,
+            compile_commands,
         } => {
             if base.is_empty() {
                 bail!("--base must not be empty");
@@ -557,7 +577,7 @@ fn main() -> Result<()> {
             let include_dirs =
                 merged_include_dirs(project_config.include_dirs.clone(), include_dirs);
             let range = format!("{base}...HEAD");
-            let (old, new) = snapshots_from_git_range(&range, include_dirs)?;
+            let (old, new) = snapshots_from_git_range(&range, include_dirs, compile_commands)?;
             let diff = diff_include_graph_snapshots(&old, &new)?;
             let report = evaluate_ci_rules(&diff, &project_config);
 
@@ -605,9 +625,63 @@ fn merged_include_dirs(mut config_dirs: Vec<PathBuf>, cli_dirs: Vec<PathBuf>) ->
     config_dirs
 }
 
+fn scan_and_graph(
+    root: &Path,
+    include_dirs: Vec<PathBuf>,
+    compile_commands: Option<PathBuf>,
+) -> Result<(ScanResult, IncludeGraph)> {
+    let (result, resolver) = scan_and_resolver(root, include_dirs, compile_commands, None, None)?;
+    let graph = IncludeGraph::from_scan_result(&result, &resolver);
+
+    Ok((result, graph))
+}
+
+fn scan_and_resolver(
+    root: &Path,
+    include_dirs: Vec<PathBuf>,
+    compile_commands: Option<PathBuf>,
+    database: Option<CompilationDatabase>,
+    database_root: Option<&Path>,
+) -> Result<(ScanResult, IncludeResolver)> {
+    if let Some(compile_commands) = compile_commands {
+        let source_root = database_root.unwrap_or(root);
+        let database = match database {
+            Some(database) => database.rebase_paths(source_root, root),
+            None => load_compilation_database_for_root(root, &compile_commands)?,
+        };
+        let result = scan_compilation_database(&database)?;
+        let resolver = IncludeResolver::with_file_search_paths(
+            root,
+            include_dirs,
+            database.file_search_paths(),
+        );
+
+        return Ok((result, resolver));
+    }
+
+    let options = ScanOptions {
+        include_dirs: include_dirs.clone(),
+    };
+    let result = scan_project(root, &options)?;
+    let resolver = IncludeResolver::new(root, include_dirs);
+
+    Ok((result, resolver))
+}
+
+fn load_compilation_database_for_root(root: &Path, path: &Path) -> Result<CompilationDatabase> {
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    };
+
+    load_compilation_database(&path)
+}
+
 fn snapshots_from_git_range(
     range: &str,
     include_dirs: Vec<PathBuf>,
+    compile_commands: Option<PathBuf>,
 ) -> Result<(
     cpp_include_insight_core::IncludeGraphSnapshot,
     cpp_include_insight_core::IncludeGraphSnapshot,
@@ -625,8 +699,24 @@ fn snapshots_from_git_range(
     let temp = tempfile::tempdir().context("failed to create temporary Git archive directory")?;
     let old_root = archive_git_revision(&git_root, &old_revision, temp.path().join("old"))?;
     let new_root = archive_git_revision(&git_root, new_revision, temp.path().join("new"))?;
-    let old_snapshot = snapshot_project(&old_root, include_dirs.clone())?;
-    let new_snapshot = snapshot_project(&new_root, include_dirs)?;
+    let database = compile_commands
+        .as_deref()
+        .map(|path| load_compilation_database_for_root(&git_root, path))
+        .transpose()?;
+    let old_snapshot = snapshot_project(
+        &old_root,
+        include_dirs.clone(),
+        compile_commands.clone(),
+        database.clone(),
+        Some(&git_root),
+    )?;
+    let new_snapshot = snapshot_project(
+        &new_root,
+        include_dirs,
+        compile_commands,
+        database,
+        Some(&git_root),
+    )?;
 
     Ok((old_snapshot, new_snapshot))
 }
@@ -703,12 +793,17 @@ fn archive_git_revision(git_root: &Path, revision: &str, output_dir: PathBuf) ->
 fn snapshot_project(
     root: &Path,
     include_dirs: Vec<PathBuf>,
+    compile_commands: Option<PathBuf>,
+    database: Option<CompilationDatabase>,
+    database_root: Option<&Path>,
 ) -> Result<cpp_include_insight_core::IncludeGraphSnapshot> {
-    let options = ScanOptions {
-        include_dirs: include_dirs.clone(),
-    };
-    let result = scan_project(root, &options)?;
-    let resolver = IncludeResolver::new(root, include_dirs);
+    let (result, resolver) = scan_and_resolver(
+        root,
+        include_dirs,
+        compile_commands,
+        database,
+        database_root,
+    )?;
     let graph = IncludeGraph::from_scan_result(&result, &resolver);
     let cycles = detect_include_cycles(&graph);
 
