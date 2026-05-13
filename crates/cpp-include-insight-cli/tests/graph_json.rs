@@ -1309,12 +1309,18 @@ fn github_action_metadata_supports_pull_request_report_inputs() {
 
     assert!(action.contains("using: composite"));
     assert!(action.contains("base:"));
+    assert!(action.contains("compile-commands:"));
+    assert!(action.contains("build-command:"));
     assert!(action.contains("fail-on-new-cycle:"));
     assert!(action.contains("comment:"));
     assert!(action.contains("report-path:"));
     assert!(action.contains("cargo build --locked --release"));
+    assert!(action.contains("Generate compilation database"));
     assert!(action.contains("report --base"));
+    assert!(action.contains("--compile-commands"));
     assert!(action.contains("CPP_INCLUDE_INSIGHT_INCLUDE_DIRS"));
+    assert!(action.contains("CPP_INCLUDE_INSIGHT_COMPILE_COMMANDS"));
+    assert!(action.contains("compile-commands input is required"));
     assert!(action.contains("mkdir -p \"$report_parent\""));
     assert!(action.contains("scripts/comment-pr-report.sh"));
 
@@ -1337,6 +1343,10 @@ fn include_insight_workflow_uses_full_checkout_and_comment_permissions() {
     assert!(workflow.contains("pull_request:"));
     assert!(workflow.contains("pull-requests: write"));
     assert!(workflow.contains("fetch-depth: 0"));
+    assert!(
+        workflow.contains("build-command: cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON")
+    );
+    assert!(workflow.contains("compile-commands: build/compile_commands.json"));
     assert!(workflow.contains("fail-on-new-cycle: true"));
     assert!(workflow.contains("comment: true"));
     assert!(workflow.contains("actions/upload-artifact@v4"));

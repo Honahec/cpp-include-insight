@@ -22,6 +22,8 @@ jobs:
         id: include-insight
         uses: Honahec/cpp-include-insight@v1
         with:
+          build-command: cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          compile-commands: build/compile_commands.json
           base: origin/main
           fail-on-new-cycle: true
           comment: true
